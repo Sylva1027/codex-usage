@@ -30,8 +30,11 @@ test("auto refresh preference gates polling, preserves manual refresh, and disab
   assert.match(start, /state\.autoRefreshTimer/);
   assert.match(stop, /window\.clearInterval/);
   assert.match(toggle, /stopAutoRefresh\(\)/);
-  assert.match(toggle, /checkForUpdates\(\)/);
+  assert.match(toggle, /if \(checkNow\) void loadUsage\(\)/);
+  assert.match(toggle, /loadUsage\(\{ skipCheck: true, freeze: true \}\)/);
   assert.match(initialize, /isStaticSnapshot\(\) \? false/);
   assert.match(visibility, /!document\.hidden && state\.autoRefreshEnabled/);
+  assert.match(source, /params\.set\("snapshot", state\.snapshotId\)/);
+  assert.match(source, /params\.set\("freeze", "1"\)/);
   assert.doesNotMatch(source, /force: true/);
 });

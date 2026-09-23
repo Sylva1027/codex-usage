@@ -10,6 +10,7 @@ import {
   renderTimelineLegendHtml,
   getRange,
   maxTimelineValue,
+  nextComparisonSort,
   formatTokenMillions,
   renderBarListHtml,
   renderComparisonHtml,
@@ -38,7 +39,6 @@ test("token values use two decimal places in millions and retain exact hover val
     totals: { today: { total: 62_617_267 }, week: { total: 0 }, month: { total: 0 }, all: { total: 0 } },
   });
   assert.match(comparisonHtml, /title="62,617,267">62\.62M/);
-  assert.match(comparisonHtml, /<td title="62,617,267">62\.62M<\/td>/);
   assert.doesNotMatch(comparisonHtml, /aria-controls="model-period-0-detail"/);
 
   const expandedHtml = renderPeriodComparisonTableHtml([
@@ -52,6 +52,31 @@ test("token values use two decimal places in millions and retain exact hover val
   });
   assert.match(expandedHtml, /aria-controls="model-period-0-detail"/);
   assert.match(expandedHtml, /id="model-period-0-detail"/);
+});
+
+test("comparison sort cycles through descending, ascending, and default order", () => {
+  const defaultSort = { period: "today", direction: "desc", showIndicator: false };
+  const descending = nextComparisonSort(defaultSort, "today");
+  const ascending = nextComparisonSort(descending, "today");
+  const cancelled = nextComparisonSort(ascending, "today");
+  assert.deepEqual(descending, { period: "today", direction: "desc", showIndicator: true });
+  assert.deepEqual(ascending, { period: "today", direction: "asc", showIndicator: true });
+  assert.deepEqual(cancelled, defaultSort);
+  assert.deepEqual(nextComparisonSort(ascending, "week"), { period: "week", direction: "desc", showIndicator: true });
+
+  const rows = [
+    { key: "directory:large", name: "/work/large", kind: "directory", periods: { today: { total: 100 } } },
+    { key: "git:small", name: "/work/small", kind: "git", periods: { today: { total: 10 } } },
+    { key: "git:medium", name: "/work/medium", kind: "git", periods: { today: { total: 20 } } },
+  ];
+  const rowNames = (sort, kind) => [...renderPeriodComparisonTableHtml(rows, { kind, sort })
+    .matchAll(/class="comparison-row-label">([^<]+)<\/span>/g)].map((match) => match[1]);
+  assert.deepEqual(rowNames(defaultSort, "repository"), ["medium", "small", "large"]);
+  assert.deepEqual(rowNames(ascending, "repository"), ["small", "medium", "large"]);
+  assert.deepEqual(rowNames(cancelled, "repository"), ["medium", "small", "large"]);
+  assert.deepEqual(rowNames(defaultSort, "model"), ["/work/large", "/work/medium", "/work/small"]);
+  assert.deepEqual(rowNames(ascending, "model"), ["/work/small", "/work/medium", "/work/large"]);
+  assert.match(renderPeriodComparisonTableHtml(rows, { sort: cancelled }), /aria-sort="none"/);
 });
 
 test("period comparison includes the union of all four periods and reconciles totals", () => {

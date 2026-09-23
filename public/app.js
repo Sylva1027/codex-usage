@@ -6,6 +6,7 @@ const state = {
   summary: null,
   periodComparison: null,
   fingerprint: "",
+  snapshotId: null,
   preset: "today",
   bucket: "hour",
   startDate: "",
@@ -1041,6 +1042,16 @@ function comparisonRowName(value, kind) {
   return parts[parts.length - 1] || name;
 }
 
+export function nextComparisonSort(current, period) {
+  if (!current?.showIndicator || current.period !== period) {
+    return { period, direction: "desc", showIndicator: true };
+  }
+  if (current.direction === "desc") {
+    return { period, direction: "asc", showIndicator: true };
+  }
+  return { period: "today", direction: "desc", showIndicator: false };
+}
+
 export function renderPeriodComparisonTableHtml(rows = [], options = {}) {
   const kind = options.kind === "repository" ? "repository" : "model";
   const query = String(options.query || "").trim().toLocaleLowerCase();
@@ -1098,12 +1109,12 @@ export function renderPeriodComparisonTableHtml(rows = [], options = {}) {
     <div class="comparison-table-scroll">
       <table class="comparison-table">
         <thead><tr><th scope="col">${kind === "repository" ? "仓库" : "模型"}</th>${periodKeys.map((period) => {
-          const isSorted = sort.period === period;
+          const isSorted = sort.showIndicator && sort.period === period;
           const direction = isSorted ? sort.direction : "desc";
-          const indicator = isSorted && sort.showIndicator ? (direction === "asc" ? "▲" : "▼") : "";
+          const indicator = isSorted ? (direction === "asc" ? "▲" : "▼") : "";
           const ariaSort = isSorted ? (direction === "asc" ? "ascending" : "descending") : "none";
           const label = COMPARISON_PERIOD_LABELS[period];
-          const sortLabel = isSorted && sort.showIndicator ? `${label}，${direction === "asc" ? "正序" : "倒序"}` : `按${label}用量排序`;
+          const sortLabel = isSorted ? `${label}，${direction === "asc" ? "正序" : "倒序"}` : `按${label}用量排序`;
           return `<th scope="col" aria-sort="${ariaSort}"><button class="comparison-sort-button" type="button" data-comparison-sort data-kind="${kind}" data-period="${period}" aria-label="${sortLabel}" title="按${label}用量排序"><span>${label}</span><span class="comparison-sort-indicator" aria-hidden="true"${indicator ? "" : " hidden"}>${indicator}</span></button></th>`;
         }).join("")}</tr></thead>
         <tbody>${body}</tbody>${totalsRow}
@@ -1812,14 +1823,17 @@ function setAutoRefreshEnabled(enabled, { persist = true, checkNow = true } = {}
   state.autoRefreshEnabled = Boolean(enabled);
   state.autoRefreshRunId += 1;
   state.autoRefreshCheckInFlight = false;
+  state.usageLoadId += 1;
   if (persist) persistAutoRefreshPreference(state.autoRefreshEnabled);
   if (state.autoRefreshEnabled) {
+    state.snapshotId = null;
     startAutoRefresh();
     setAutoRefreshStatus(checkNow ? "已开启，正在检查…" : "");
-    if (checkNow) void checkForUpdates();
+    if (checkNow) void loadUsage();
   } else {
     stopAutoRefresh();
     setAutoRefreshStatus("已关闭");
+    void loadUsage({ skipCheck: true, freeze: true });
   }
   renderAutoRefreshControls();
 }
@@ -2187,7 +2201,7 @@ function activateRecentValue(value) {
   refreshViewForFilters();
 }
 
-function usageQuery({ skipCheck = false } = {}) {
+function usageQuery({ skipCheck = false, freeze = false } = {}) {
   const params = new URLSearchParams({
     preset: state.preset,
     bucket: state.bucket,
@@ -2207,10 +2221,15 @@ function usageQuery({ skipCheck = false } = {}) {
   if (skipCheck) {
     params.set("skipCheck", "1");
   }
+  if (freeze) {
+    params.set("freeze", "1");
+  } else if (!state.autoRefreshEnabled && state.snapshotId) {
+    params.set("snapshot", state.snapshotId);
+  }
   return `?${params.toString()}`;
 }
 
-async function loadUsage({ skipCheck = false } = {}) {
+async function loadUsage({ skipCheck = false, freeze = false } = {}) {
   const loadId = ++state.usageLoadId;
   const embeddedReport = window.__CODEX_USAGE_REPORT__;
 
@@ -2224,7 +2243,7 @@ async function loadUsage({ skipCheck = false } = {}) {
       state.fingerprint = "static";
       setAutoRefreshStatus("此静态快照不会轮询；运行 npm run export 可生成新快照");
     } else {
-      const response = await fetch(`/api/usage${usageQuery({ skipCheck })}`);
+      const response = await fetch(`/api/usage${usageQuery({ skipCheck, freeze: freeze || (!state.autoRefreshEnabled && !state.snapshotId) })}`);
       if (!response.ok) throw new Error(`API ${response.status}`);
       const data = await response.json();
       if (loadId !== state.usageLoadId) return;
@@ -2233,8 +2252,9 @@ async function loadUsage({ skipCheck = false } = {}) {
       state.summary = data.summary;
       state.periodComparison = data.periodComparison || null;
       state.fingerprint = data.fingerprint || "";
+      state.snapshotId = data.snapshotId || null;
       if (data.checkedAt) state.lastSuccessfulCheck = data.checkedAt;
-      setAutoRefreshStatus("");
+      setAutoRefreshStatus(state.autoRefreshEnabled ? "" : "已关闭");
     }
     if (loadId !== state.usageLoadId) return;
     renderAutoRefreshControls();
@@ -2426,10 +2446,7 @@ function bootDashboard() {
       if (sortButton) {
         const { kind, period } = sortButton.dataset;
         const stateKey = kind === "repository" ? "repositoryComparisonSort" : "modelComparisonSort";
-        const currentSort = state[stateKey];
-        state[stateKey] = currentSort.period === period
-          ? { period, direction: currentSort.direction === "desc" ? "asc" : "desc", showIndicator: true }
-          : { period, direction: "desc", showIndicator: true };
+        state[stateKey] = nextComparisonSort(state[stateKey], period);
         renderPeriodComparisons(state.periodComparison);
         document.querySelector(`#${kind === "repository" ? "repositoryComparisonTable" : "modelComparisonTable"} [data-comparison-sort][data-period="${period}"]`)?.focus({ preventScroll: true });
         return;

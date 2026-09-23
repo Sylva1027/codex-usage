@@ -202,6 +202,49 @@ test("server reports status changes and refreshes cached usage reports", async (
   }
 });
 
+test("paused usage keeps the same indexed data across range changes", async () => {
+  const { homeDir, importStoreFile, databaseFile, sessionFile } = await makeFixtureHome();
+  const server = createUsageServer({ homeDir, importStoreFile, databaseFile });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const paused = await fetch(`${baseUrl}/api/usage?preset=all&freeze=1`).then((response) => response.json());
+    assert.equal(paused.summary.totals.total, 123);
+    assert.ok(paused.snapshotId);
+
+    await appendFile(sessionFile, JSON.stringify({
+      timestamp: "2026-05-01T02:02:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            total_tokens: 200, input_tokens: 160, cached_input_tokens: 30,
+            output_tokens: 40, reasoning_output_tokens: 7,
+          },
+        },
+      },
+    }) + "\n");
+
+    const live = await fetch(`${baseUrl}/api/usage?preset=all`).then((response) => response.json());
+    assert.equal(live.summary.totals.total, 200);
+
+    for (const preset of ["all", "week", "month", "custom"]) {
+      const range = preset === "custom" ? "&startDate=2026-05-01&endDate=2026-05-01" : "";
+      const frozen = await fetch(`${baseUrl}/api/usage?preset=${preset}&snapshot=${paused.snapshotId}${range}`)
+        .then((response) => response.json());
+      assert.equal(frozen.summary.totals.total, preset === "all" || preset === "custom" ? 123 : 0);
+      assert.equal(frozen.checkedAt, paused.checkedAt);
+      assert.equal(frozen.snapshotId, paused.snapshotId);
+      assert.equal(frozen.periodComparison.asOf, paused.periodComparison.asOf);
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(homeDir, { recursive: true, force: true });
+  }
+});
+
 test("server imports project usage log directories and refreshes usage data", async () => {
   const { homeDir, importStoreFile } = await makeFixtureHome();
   const projectRoot = path.join(homeDir, "openai_codex");

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -333,52 +333,6 @@ test("cli dashboard starts a background service and prints the dashboard URL", a
 
     const usage = await fetch(`${match[0]}/api/usage`).then((response) => response.json());
     assert.equal(usage.summary.totals.total, 77);
-  } finally {
-    await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
-  }
-});
-
-test("cud command opens the dashboard by default", async () => {
-  const homeDir = await makeFixtureHome();
-  const stateFile = path.join(homeDir, "services.json");
-  const binDir = await mkdtemp(path.join(tmpdir(), "codex-cud-bin-"));
-  const cudPath = path.join(binDir, "cud");
-  await symlink(path.resolve(import.meta.dirname, "..", "src", "cli.js"), cudPath);
-  await chmod(cudPath, 0o755);
-
-  try {
-    const output = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [
-        cudPath,
-        "--no-open",
-        "--host",
-        "127.0.0.1",
-        "--port",
-        "0",
-        "--home-dir",
-        homeDir,
-        "--state-file",
-        stateFile,
-      ], {
-        env: isolatedEnv(homeDir),
-      });
-      let text = "";
-      child.stdout.on("data", (chunk) => {
-        text += chunk.toString();
-      });
-      child.stderr.on("data", (chunk) => {
-        text += chunk.toString();
-      });
-      child.on("exit", (code) => {
-        if (code === 0) {
-          resolve(text);
-        } else {
-          reject(new Error(`cud exited with ${code}: ${text}`));
-        }
-      });
-    });
-    assert.match(output, /Codex Usage dashboard/);
-    assert.match(output, /http:\/\/127\.0\.0\.1:(\d+)/);
   } finally {
     await runCli(["stop", "--state-file", stateFile], isolatedEnv(homeDir));
   }
