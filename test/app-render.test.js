@@ -5,12 +5,18 @@ import {
   datePickerMonthModel,
   drawTimeline,
   filterPeriodComparisonRows,
+  getChannelColors,
+  getModelColors,
+  renderTimelineLegendHtml,
+  getRange,
+  maxTimelineValue,
   formatTokenMillions,
   renderBarListHtml,
   renderComparisonHtml,
   renderDatePickerHtml,
   renderHomesHtml,
   renderPeriodComparisonTableHtml,
+  setSummaryFilters,
   timelineAxisLabels,
 } from "../public/app.js";
 
@@ -33,32 +39,171 @@ test("token values use two decimal places in millions and retain exact hover val
   });
   assert.match(comparisonHtml, /title="62,617,267">62\.62M/);
   assert.match(comparisonHtml, /<td title="62,617,267">62\.62M<\/td>/);
+  assert.doesNotMatch(comparisonHtml, /aria-controls="model-period-0-detail"/);
+
+  const expandedHtml = renderPeriodComparisonTableHtml([
+    {
+      key: "gpt-6-luna",
+      name: "gpt-6-luna",
+      periods: { today: { total: 62_617_267 }, week: { total: 0 }, month: { total: 0 }, all: { total: 0 } },
+    },
+  ], {
+    expanded: { kind: "model", key: "gpt-6-luna", period: "today" },
+  });
+  assert.match(expandedHtml, /aria-controls="model-period-0-detail"/);
+  assert.match(expandedHtml, /id="model-period-0-detail"/);
 });
 
-test("period comparison only shows active models and repositories in the selected range", () => {
-  const models = filterPeriodComparisonRows(
-    [{ key: "gpt-6-luna" }, { key: "gpt-6-sol" }, { key: "gpt-6-astra" }],
-    [
-      { key: "gpt-6-luna", total: { total: 120 } },
-      { key: "gpt-6-sol", total: { total: 4 } },
-      { key: "gpt-6-astra", total: { total: 0 } },
-    ],
-  );
+test("period comparison includes the union of all four periods and reconciles totals", () => {
+  const models = filterPeriodComparisonRows([
+    {
+      key: "gpt-6-luna",
+      periods: {
+        today: { total: 120 },
+        week: { total: 200 },
+        month: { total: 300 },
+        all: { total: 400 },
+      },
+    },
+    {
+      key: "gpt-6-sol",
+      periods: {
+        today: { total: 0 },
+        week: { total: 4 },
+        month: { total: 4 },
+        all: { total: 4 },
+      },
+    },
+    {
+      key: "gpt-6-astra",
+      periods: {
+        today: { total: 0 },
+        week: { total: 0 },
+        month: { total: 0 },
+        all: { total: 0 },
+      },
+    },
+  ]);
   assert.deepEqual(models.map((row) => row.key), ["gpt-6-luna", "gpt-6-sol"]);
+  for (const [period, total] of Object.entries({ today: 120, week: 204, month: 304, all: 404 })) {
+    assert.equal(models.reduce((sum, row) => sum + row.periods[period].total, 0), total);
+  }
 
-  const repositories = filterPeriodComparisonRows(
-    [
-      { key: "directory:shared", kind: "directory" },
-      { key: "directory:inactive", kind: "directory" },
-      { key: "git:repo", kind: "git", sourceKeys: ["git:repo"] },
-    ],
-    [
-      { key: "directory:shared", total: { total: 12 } },
-      { key: "git:repo", total: { total: 30 }, sessionIds: ["other-session"] },
-    ],
-    "repository",
-  );
+  const repositories = filterPeriodComparisonRows([
+    {
+      key: "directory:shared",
+      kind: "directory",
+      periods: { today: { total: 12 }, week: { total: 12 }, month: { total: 12 }, all: { total: 12 } },
+    },
+    {
+      key: "directory:inactive",
+      kind: "directory",
+      periods: { today: { total: 0 }, week: { total: 0 }, month: { total: 0 }, all: { total: 0 } },
+    },
+    {
+      key: "git:repo",
+      kind: "git",
+      sourceKeys: ["git:repo"],
+      periods: { today: { total: 0 }, week: { total: 30 }, month: { total: 30 }, all: { total: 30 } },
+    },
+  ]);
   assert.deepEqual(repositories.map((row) => row.key), ["directory:shared", "git:repo"]);
+});
+
+test("event date range handles enough records to exceed argument spread limits", () => {
+  setSummaryFilters({ preset: "all", now: null, startDate: "", endDate: "" });
+  const firstTimestamp = Date.parse("2026-01-01T00:00:00.000Z");
+  const lastTimestamp = firstTimestamp + 124_999 * 1000;
+  const events = Array.from({ length: 125_000 }, (_, index) => ({
+    timestamp: new Date(firstTimestamp + index * 1000).toISOString(),
+  }));
+
+  const range = getRange(events);
+  assert.ok(range.start instanceof Date);
+  assert.ok(range.end instanceof Date);
+  assert.ok(range.start.getTime() <= firstTimestamp);
+  assert.ok(range.end.getTime() >= lastTimestamp);
+});
+
+test("timeline maximum handles enough values to exceed argument spread limits", () => {
+  const values = Array(125_000).fill(1);
+  values[values.length - 1] = 42;
+  assert.equal(maxTimelineValue(values), 42);
+});
+
+test("channel colors remain attached to channels when row order changes", () => {
+  const oldDocument = globalThis.document;
+  const oldGetComputedStyle = globalThis.getComputedStyle;
+  globalThis.document = { documentElement: {} };
+  globalThis.getComputedStyle = () => ({ getPropertyValue: () => "" });
+  try {
+    const channels = [{ name: "CLI" }, { name: "IDE" }, { name: "API" }, { name: "Unknown" }];
+    const first = getChannelColors(channels);
+    const reordered = getChannelColors([...channels].reverse());
+    for (const channel of channels) {
+      assert.equal(reordered.get(channel.name), first.get(channel.name));
+    }
+  } finally {
+    if (oldDocument === undefined) delete globalThis.document;
+    else globalThis.document = oldDocument;
+    if (oldGetComputedStyle === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = oldGetComputedStyle;
+  }
+});
+
+test("timeline model and channel legends assign distinct colors in both themes", () => {
+  const oldDocument = globalThis.document;
+  const rows = ["gpt-5.6-luna", "gpt-6-luna", "gpt-5.6-sol", "gpt-6-sol", "gpt-6-astra", "codex-auto-review"]
+    .map((name, index) => ({ name, total: { total: 600 - index * 100 } }));
+  const rgb = (hex) => [1, 3, 5].map((index) => Number.parseInt(hex.slice(index, index + 2), 16));
+  try {
+    for (const theme of ["light", "dark"]) {
+      globalThis.document = { documentElement: { dataset: { theme } } };
+      for (const colorsFor of [getModelColors, getChannelColors]) {
+        const colors = colorsFor(rows);
+        const reordered = colorsFor([...rows].reverse());
+        const swatches = [...colors.values()];
+        assert.equal(new Set(swatches).size, rows.length);
+        for (const row of rows) assert.equal(colors.get(row.name), reordered.get(row.name));
+        if (colorsFor === getModelColors) {
+          assert.equal(colors.get("gpt-6-luna"), getModelColors([{ name: "gpt-6-luna" }]).get("gpt-6-luna"));
+        }
+        for (let i = 0; i < swatches.length; i += 1) {
+          for (let j = i + 1; j < swatches.length; j += 1) {
+            const first = rgb(swatches[i]);
+            const second = rgb(swatches[j]);
+            assert.ok(Math.hypot(...first.map((value, channel) => value - second[channel])) > 85);
+          }
+        }
+      }
+    }
+  } finally {
+    if (oldDocument === undefined) delete globalThis.document;
+    else globalThis.document = oldDocument;
+  }
+});
+
+test("timeline legend shows every model directly without a heading or expand control", () => {
+  const oldDocument = globalThis.document;
+  globalThis.document = { documentElement: { dataset: { theme: "dark" } } };
+  try {
+    const names = ["gpt-5.6-luna", "gpt-6-luna", "gpt-5.6-sol", "gpt-6-sol",
+      "gpt-6-astra", "codex-auto-review", "Unknown model"];
+    const colors = getModelColors(names.map((name) => ({ name })));
+    const timeline = [{
+      models: names.map((name, index) => ({ name, total: { total: index + 1 } })),
+      costByModel: Object.fromEntries(names.map((name, index) => [name, { totalUsd: index + 1 }])),
+    }];
+    for (const mode of ["model", "cost"]) {
+      const html = renderTimelineLegendHtml({ timeline }, mode, new Map(), colors);
+      assert.equal((html.match(/role="listitem"/g) || []).length, names.length);
+      for (const name of names) assert.ok(html.includes(`>${name}</span>`));
+      assert.doesNotMatch(html, /<details|timeline-legend-title|其余/);
+    }
+  } finally {
+    if (oldDocument === undefined) delete globalThis.document;
+    else globalThis.document = oldDocument;
+  }
 });
 
 test("render helpers escape usage row names before inserting HTML", () => {
@@ -337,15 +482,17 @@ test("drawTimeline renders model and cost stacks and rejects missing breakdowns"
     };
     const modelRows = [{ name: "gpt-6-sol", total: { total: 100 } }];
 
-    drawTimeline(canvas, [row], [], new Map(), null, "model", modelRows);
+    const allPeriodColors = new Map([["gpt-6-sol", "#123456"]]);
+    drawTimeline(canvas, [row], [], new Map(), null, "model", modelRows, allPeriodColors);
     const modelBars = calls.filter((call) => call.type === "rect");
     assert.equal(modelBars.length, 1);
-    assert.match(modelBars[0].fillStyle, /^hsl\(/);
+    assert.equal(modelBars[0].fillStyle, allPeriodColors.get("gpt-6-sol"));
 
     calls.length = 0;
-    drawTimeline(canvas, [row], [], new Map(), null, "cost", modelRows);
+    drawTimeline(canvas, [row], [], new Map(), null, "cost", modelRows, allPeriodColors);
     const costBars = calls.filter((call) => call.type === "rect");
     assert.equal(costBars.length, 1);
+    assert.equal(costBars[0].fillStyle, modelBars[0].fillStyle);
     assert.ok(calls.some((call) => call.type === "text" && call.text === "$0.25"));
 
     const staleRow = { key: row.key, total: row.total };

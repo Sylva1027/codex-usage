@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import v8 from "node:v8";
 
@@ -15,6 +16,8 @@ import {
   summarizeUsage,
 } from "./usage-core.js";
 import { UsageStore } from "./usage-store.js";
+import { getPricingCatalog, pricingVersionForTimestamp, setPricingCatalog, validatePricingCatalog } from "./pricing.js";
+import { loadPricingFile, savePricingFile } from "./pricing-store.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.resolve(__dirname, "..", "public");
@@ -46,14 +49,33 @@ function sendText(response, statusCode, body) {
   response.end(body);
 }
 
+function isValidDateOnly(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(0);
+  date.setFullYear(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
 function requestFilters(url) {
-  return {
-    preset: url.searchParams.get("preset") || "all",
-    bucket: url.searchParams.get("bucket") || "day",
-    startDate: url.searchParams.get("startDate") || "",
-    endDate: url.searchParams.get("endDate") || "",
-    recentValue: url.searchParams.get("recentValue") || "",
-  };
+  const preset = url.searchParams.get("preset") || "all";
+  const bucket = url.searchParams.get("bucket") || "day";
+  const startDate = url.searchParams.get("startDate") || "";
+  const endDate = url.searchParams.get("endDate") || "";
+  const recentValue = url.searchParams.get("recentValue") || "";
+
+  if (!["hour", "day", "week", "month"].includes(bucket)) {
+    throw httpError(400, "Invalid bucket.");
+  }
+  if (preset === "custom") {
+    if ((startDate && !isValidDateOnly(startDate)) || (endDate && !isValidDateOnly(endDate))) {
+      throw httpError(400, "Invalid custom date.");
+    }
+    if (startDate && endDate && startDate > endDate) {
+      throw httpError(400, "Start date must not be after end date.");
+    }
+  }
+  return { preset, bucket, startDate, endDate, recentValue };
 }
 
 export function isFullDetailHeapAvailable(heapSizeLimitBytes = v8.getHeapStatistics().heap_size_limit) {
@@ -142,15 +164,38 @@ async function usageOptions(options = {}) {
   return { ...options, importDirs };
 }
 
-async function readJsonBody(request) {
-  let body = "";
+function clientFingerprint(sourceFingerprint) {
+  return createHash("sha256").update(sourceFingerprint).update("\0").update(pricingVersionForTimestamp()).digest("hex");
+}
+
+function httpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+export async function readJsonBody(request) {
+  const chunks = [];
+  let byteLength = 0;
   for await (const chunk of request) {
-    body += chunk;
-    if (body.length > 16_384) {
-      throw new Error("Request body too large");
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    byteLength += buffer.length;
+    if (byteLength > 16_384) {
+      throw httpError(413, "Request body too large");
     }
+    chunks.push(buffer);
   }
-  return body ? JSON.parse(body) : {};
+  if (!byteLength) return {};
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw httpError(400, "Request body must be a JSON object.");
+    }
+    return body;
+  } catch (error) {
+    if (error.statusCode) throw error;
+    throw httpError(400, "Invalid JSON request body.");
+  }
 }
 
 async function pickDirectoryWithSystemDialog() {
@@ -181,8 +226,16 @@ function pickDirectory(options = {}) {
 
 async function serveStatic(requestPath, response) {
   const normalized = requestPath === "/" ? "/index.html" : requestPath;
-  const filePath = path.resolve(PUBLIC_DIR, `.${decodeURIComponent(normalized)}`);
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  let decoded;
+  try {
+    decoded = decodeURIComponent(normalized);
+  } catch {
+    sendText(response, 400, "Bad request");
+    return;
+  }
+  const filePath = path.resolve(PUBLIC_DIR, `.${decoded}`);
+  const relativePath = path.relative(PUBLIC_DIR, filePath);
+  if (relativePath === ".." || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
     sendText(response, 403, "Forbidden");
     return;
   }
@@ -201,6 +254,7 @@ async function serveStatic(requestPath, response) {
 
 export function createUsageServer(options = {}) {
   const usageStore = new UsageStore(options);
+  const pricingReady = loadPricingFile(options);
   let storeStatus = null;
   let syncPromise = null;
 
@@ -238,12 +292,33 @@ export function createUsageServer(options = {}) {
     const url = new URL(request.url || "/", "http://127.0.0.1");
 
     try {
+      await pricingReady;
+      if (url.pathname === "/api/pricing") {
+        if (request.method === "GET") {
+          sendJson(response, 200, getPricingCatalog());
+          return;
+        }
+        if (request.method === "PUT") {
+          let catalog;
+          try {
+            catalog = validatePricingCatalog(await readJsonBody(request));
+          } catch (error) {
+            throw httpError(error.statusCode || 400, error.message);
+          }
+          await savePricingFile(options, catalog);
+          sendJson(response, 200, setPricingCatalog(catalog));
+          return;
+        }
+        sendJson(response, 405, { error: "Method not allowed" });
+        return;
+      }
+
       if (url.pathname === "/api/status") {
         const status = await buildUsageFingerprint(await usageOptions(options));
         const since = url.searchParams.get("since") || "";
         sendJson(response, 200, {
-          fingerprint: status.fingerprint,
-          changed: since ? status.fingerprint !== since : true,
+          fingerprint: clientFingerprint(status.fingerprint),
+          changed: since ? clientFingerprint(status.fingerprint) !== since : true,
           checkedAt: status.checkedAt,
         });
         return;
@@ -289,6 +364,21 @@ export function createUsageServer(options = {}) {
         return;
       }
 
+      if (url.pathname === "/internal/shutdown") {
+        if (request.method !== "POST") {
+          sendJson(response, 405, { error: "Method not allowed" });
+          return;
+        }
+        if (!options.shutdownToken || request.headers["x-codex-usage-shutdown-token"] !== options.shutdownToken) {
+          sendJson(response, 403, { error: "Forbidden" });
+          return;
+        }
+        response.writeHead(202, { "cache-control": "no-store" });
+        response.end();
+        setImmediate(() => options.onShutdown?.());
+        return;
+      }
+
       if (url.pathname === "/api/pick-directory") {
         if (request.method !== "POST") {
           sendJson(response, 405, { error: "Method not allowed" });
@@ -311,13 +401,14 @@ export function createUsageServer(options = {}) {
             return;
           }
 
+          const filters = requestFilters(url);
           const currentUsageOptions = await usageOptions(options);
           const status = await buildUsageFingerprint(currentUsageOptions);
           const report = await buildUsageReport(currentUsageOptions);
           const asOf = new Date();
-          const filters = { ...requestFilters(url), now: asOf };
+          Object.assign(filters, { now: asOf });
           sendJson(response, 200, {
-            fingerprint: status.fingerprint,
+            fingerprint: clientFingerprint(status.fingerprint),
             checkedAt: status.checkedAt,
             metadata: {
               generatedAt: report.generatedAt,
@@ -335,12 +426,13 @@ export function createUsageServer(options = {}) {
           return;
         }
 
+        const filters = requestFilters(url);
         const check = url.searchParams.get("skipCheck") !== "1";
         const usage = await loadUsageStore({ check });
         const asOf = new Date();
-        const filters = { ...requestFilters(url), now: asOf };
+        Object.assign(filters, { now: asOf });
         sendJson(response, 200, {
-          fingerprint: usage.fingerprint,
+          fingerprint: clientFingerprint(usage.fingerprint),
           checkedAt: usage.checkedAt,
           metadata: await metadataForStore(),
           summary: usageStore.summarize(filters),
@@ -350,11 +442,12 @@ export function createUsageServer(options = {}) {
       }
 
       if (url.pathname === "/api/summary") {
+        const filters = requestFilters(url);
         const usage = await loadUsageStore();
         const asOf = new Date();
-        const filters = { ...requestFilters(url), now: asOf };
+        Object.assign(filters, { now: asOf });
         sendJson(response, 200, {
-          fingerprint: usage.fingerprint,
+          fingerprint: clientFingerprint(usage.fingerprint),
           checkedAt: usage.checkedAt,
           metadata: await metadataForStore(),
           summary: usageStore.summarize(filters),
@@ -365,7 +458,7 @@ export function createUsageServer(options = {}) {
 
       await serveStatic(url.pathname, response);
     } catch (error) {
-      sendJson(response, 500, {
+      sendJson(response, error.statusCode || 500, {
         error: error.message,
         stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
       });
@@ -377,7 +470,7 @@ export function createUsageServer(options = {}) {
   return server;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const port = Number(process.env.PORT || 3765);
   const host = process.env.HOST || "127.0.0.1";
   const server = createUsageServer();

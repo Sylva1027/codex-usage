@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
@@ -9,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { createUsageServer } from "./server.js";
 import { buildUsageReport, summarizeUsage } from "./usage-core.js";
 import { UsageStore } from "./usage-store.js";
+import { loadPricingFile } from "./pricing-store.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 3765;
@@ -260,6 +262,7 @@ function printHuman(summary) {
 }
 
 async function printSummary(command, args) {
+  await loadPricingFile(reportOptions(args));
   if (command === "json") {
     const report = await buildUsageReport(reportOptions(args));
     const summary = summarizeUsage(report, { preset: "all", bucket: "month" });
@@ -286,8 +289,13 @@ function runServer(args) {
   const host = readOption(args, "--host", process.env.HOST || DEFAULT_HOST);
   const port = parsePort(readOption(args, "--port", process.env.PORT || String(DEFAULT_PORT)));
   const stateFile = stateFilePath(args);
-  const server = createUsageServer(reportOptions(args));
+  const shutdownToken = randomBytes(32).toString("hex");
   let shuttingDown = false;
+  const server = createUsageServer({
+    ...reportOptions(args),
+    shutdownToken,
+    onShutdown: () => void shutdown(),
+  });
 
   server.listen(port, host, async () => {
     const address = server.address();
@@ -296,6 +304,7 @@ function runServer(args) {
     try {
       await registerService(stateFile, {
         pid: process.pid,
+        shutdownToken,
         host,
         port: actualPort,
         url,
@@ -390,6 +399,27 @@ async function openDashboard(args) {
   console.log(`Codex Usage dashboard: ${service.url}`);
 }
 
+async function requestServiceShutdown(service) {
+  if (service.shutdownToken && service.url) {
+    try {
+      const response = await fetch(new URL("/internal/shutdown", service.url), {
+        method: "POST",
+        headers: { "x-codex-usage-shutdown-token": service.shutdownToken },
+        signal: AbortSignal.timeout(1500),
+      });
+      return response.status === 202;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    process.kill(service.pid, "SIGTERM");
+    return true;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
 async function stopRunningServices(args, { announce = true } = {}) {
   const stateFile = stateFilePath(args);
   const services = await readServices(stateFile);
@@ -405,13 +435,17 @@ async function stopRunningServices(args, { announce = true } = {}) {
     return { stoppedServices: [], stillRunningServices: [] };
   }
 
-  for (const service of runningServices) {
-    process.kill(service.pid, "SIGTERM");
-  }
-
   const stoppedServices = [];
   const stillRunningServices = [];
+  const requestedServices = [];
   for (const service of runningServices) {
+    if (await requestServiceShutdown(service)) {
+      requestedServices.push(service);
+    } else {
+      stillRunningServices.push(service);
+    }
+  }
+  for (const service of requestedServices) {
     if (await waitForProcessExit(service.pid)) {
       stoppedServices.push(service);
     } else {

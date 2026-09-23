@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { appendFile, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createUsageServer, isFullDetailHeapAvailable } from "../src/server.js";
+import { createUsageServer, isFullDetailHeapAvailable, readJsonBody } from "../src/server.js";
 
 function jsonl(rows) {
   return rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
@@ -110,6 +111,13 @@ test("server serves the dashboard and usage API", async () => {
     assert.equal(json.metadata.homes[0].eventCount, 1);
     assert.equal(json.report, undefined);
     assert.ok((await stat(databaseFile)).size > 0);
+
+    const invalidDate = await fetch(baseUrl + "/api/summary?preset=custom&startDate=2026-02-30");
+    const invalidBucket = await fetch(baseUrl + "/api/summary?bucket=fortnight");
+    const malformedPath = await fetch(baseUrl + "/%E0%A4%A");
+    assert.equal(invalidDate.status, 400);
+    assert.equal(invalidBucket.status, 400);
+    assert.equal(malformedPath.status, 400);
 
     const detailed = await fetch(`${baseUrl}/api/usage?detail=full`).then((response) => response.json());
     assert.equal(detailed.report.events[0].channel, "CLI");
@@ -276,5 +284,155 @@ test("server returns a picked directory from the local directory picker", async 
     assert.deepEqual(body, { path: pickedPath });
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+
+test("JSON request parsing preserves UTF-8 split across chunks and returns client errors", async () => {
+  const payload = Buffer.from(JSON.stringify({ path: "项目" }), "utf8");
+  const split = payload.indexOf(Buffer.from("项目", "utf8")) + 1;
+  const request = {
+    async *[Symbol.asyncIterator]() {
+      yield payload.subarray(0, split);
+      yield payload.subarray(split);
+    },
+  };
+
+  assert.deepEqual(await readJsonBody(request), { path: "项目" });
+
+  await assert.rejects(
+    readJsonBody({
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from("{invalid", "utf8");
+      },
+    }),
+    (error) => error.statusCode === 400,
+  );
+  await assert.rejects(
+    readJsonBody({
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.alloc(16_385, 32);
+      },
+    }),
+    (error) => error.statusCode === 413,
+  );
+});
+
+test("server starts directly when its script path contains spaces", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "codex server launch "));
+  const homeDir = path.join(root, "fake home");
+  const projectRoot = path.resolve(import.meta.dirname, "..");
+  const scriptFile = path.join(projectRoot, "src", "server.js");
+  const child = spawn(process.execPath, [scriptFile], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      USERPROFILE: homeDir,
+      HOME: homeDir,
+      APPDATA: path.join(homeDir, "AppData", "Roaming"),
+      LOCALAPPDATA: path.join(homeDir, "AppData", "Local"),
+      CODEX_USAGE_HOMES: "",
+      CODEX_USAGE_IMPORT_DIRS: "",
+      HOST: "127.0.0.1",
+      PORT: "0",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  try {
+    const output = await new Promise((resolve, reject) => {
+      let text = "";
+      const timer = setTimeout(() => reject(new Error("Timed out waiting for server startup: " + text)), 5_000);
+      child.stdout.on("data", (chunk) => {
+        text += chunk.toString();
+        if (text.includes("Codex Usage dashboard:")) {
+          clearTimeout(timer);
+          resolve(text);
+        }
+      });
+      child.stderr.on("data", (chunk) => { text += chunk.toString(); });
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        reject(new Error("Server exited before startup with code " + code + ": " + text));
+      });
+    });
+    assert.match(output, /http:\/\/127\.0\.0\.1:\d+/);
+  } finally {
+    if (child.exitCode === null) child.kill();
+    if (child.exitCode === null) {
+      await new Promise((resolve) => child.once("close", resolve));
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("pricing API validates, persists, and reprices indexed history", async () => {
+  const fixture = await makeFixtureHome();
+  const projectRoot = path.join(fixture.homeDir, "priced-project");
+  await mkdir(path.join(projectRoot, ".codex-usage"), { recursive: true });
+  await writeFile(path.join(projectRoot, ".codex-usage", "usage.jsonl"), jsonl([{
+    schema_version: "codex-usage.project-log.v1",
+    timestamp: "2026-05-31T12:00:00.000Z",
+    session_id: "priced-session",
+    request_id: "priced-request",
+    model: "gpt-6-sol",
+    cwd: projectRoot,
+    usage: { total: 110, input: 100, cached: 20, cache_write_input_tokens: 0, output: 10 },
+    service_tier: "standard",
+  }]));
+  const options = { ...fixture, importDirs: [projectRoot] };
+  let server = createUsageServer(options);
+  const listen = async () => {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    return `http://127.0.0.1:${server.address().port}`;
+  };
+  const close = async () => new Promise((resolve) => server.close(resolve));
+  try {
+    let baseUrl = await listen();
+    const original = await fetch(`${baseUrl}/api/pricing`).then((response) => response.json());
+    const before = await fetch(`${baseUrl}/api/usage?preset=all`).then((response) => response.json());
+    assert.equal(original.models["gpt-6-sol"].short.input, 2);
+    assert.ok(before.summary.costEstimate.totalUsd > 0);
+
+    const invalid = structuredClone(original);
+    invalid.models["gpt-6-sol"].short.input = -1;
+    const rejected = await fetch(`${baseUrl}/api/pricing`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(invalid),
+    });
+    assert.equal(rejected.status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/pricing`).then((response) => response.json())).models["gpt-6-sol"].short.input, 2);
+
+    const updated = structuredClone(original);
+    updated.checkedAt = "2026-09-24";
+    updated.models["gpt-6-sol"].short.input = 4;
+    const saved = await fetch(`${baseUrl}/api/pricing`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(updated),
+    });
+    assert.equal(saved.status, 200);
+    const savedCatalog = await saved.json();
+    const after = await fetch(`${baseUrl}/api/usage?preset=all&skipCheck=1`).then((response) => response.json());
+    assert.equal(savedCatalog.checkedAt, "2026-09-24");
+    assert.equal(after.summary.costEstimate.priceCheckedAt, "2026-09-24");
+    const changedStatus = await fetch(`${baseUrl}/api/status?since=${encodeURIComponent(before.fingerprint)}`).then((response) => response.json());
+    assert.equal(changedStatus.changed, true);
+    assert.equal(changedStatus.fingerprint, after.fingerprint);
+    assert.ok(Math.abs(after.summary.costEstimate.totalUsd - before.summary.costEstimate.totalUsd - 0.00016) < 1e-12);
+    assert.equal(after.summary.totals.total, before.summary.totals.total);
+    assert.ok((await stat(path.join(fixture.homeDir, ".codex-usage", "pricing.json"))).size > 0);
+
+    await close();
+    server = createUsageServer(options);
+    baseUrl = await listen();
+    const restarted = await fetch(`${baseUrl}/api/usage?preset=all`).then((response) => response.json());
+    assert.equal(restarted.summary.costEstimate.totalUsd, after.summary.costEstimate.totalUsd);
+    assert.equal(restarted.summary.costEstimate.priceCheckedAt, "2026-09-24");
+  } finally {
+    if (server.listening) await close();
+    await rm(fixture.homeDir, { recursive: true, force: true });
   }
 });

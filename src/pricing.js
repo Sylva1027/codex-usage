@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export const API_PRICING_CHECKED_AT = "2026-09-23";
 export const API_PRICING_VERSION = "2026-09-23";
 export const API_PRICING_MODE = "standard-scenario";
@@ -23,17 +25,68 @@ const PRICE_ALIASES = Object.freeze({
   "gpt-daybreak-blue-latest": "gpt-5.6-sol",
 });
 
-// Each persisted event records the rate table used when it was indexed. Add a new
-// dated table here when official prices change; historical records then retain
-// the version selected for their request until the source file is re-indexed.
-const PRICE_VERSIONS = Object.freeze({ [API_PRICING_VERSION]: MODEL_PRICES });
+// Custom rates reprice all indexed events so the dashboard remains internally
+// consistent. The original token counts and recorded price versions are retained.
+let activePricing = { checkedAt: API_PRICING_CHECKED_AT, version: API_PRICING_VERSION, models: MODEL_PRICES };
 
 export const API_TOKEN_PRICES = Object.freeze(Object.fromEntries(
   Object.entries(MODEL_PRICES).map(([model, rates]) => [model, rates.short]),
 ));
 
+export function getPricingCatalog() {
+  return { checkedAt: activePricing.checkedAt, version: activePricing.version,
+    source: API_PRICING_SOURCE, models: structuredClone(activePricing.models) };
+}
+
+export function validatePricingCatalog(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Pricing must be an object.");
+  const checkedAt = value.checkedAt;
+  if (typeof checkedAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(checkedAt) ||
+      Number.isNaN(Date.parse(`${checkedAt}T00:00:00Z`)) ||
+      new Date(`${checkedAt}T00:00:00Z`).toISOString().slice(0, 10) !== checkedAt) {
+    throw new Error("Pricing date must be a valid YYYY-MM-DD date.");
+  }
+  const models = value.models;
+  if (!models || typeof models !== "object" || Array.isArray(models)) throw new Error("Model prices are required.");
+  const keys = Object.keys(models);
+  if (keys.length < Object.keys(MODEL_PRICES).length || keys.length > 100 ||
+      Object.keys(MODEL_PRICES).some((key) => !Object.hasOwn(models, key))) {
+    throw new Error("All built-in models must have prices.");
+  }
+  const normalized = {};
+  for (const model of keys.sort()) {
+    if (!/^[a-z0-9][a-z0-9._-]{0,79}$/.test(model)) throw new Error(`Invalid model name: ${model}`);
+    const contexts = models[model];
+    if (!contexts || typeof contexts !== "object" || Array.isArray(contexts)) throw new Error(`Invalid rates for ${model}`);
+    normalized[model] = {};
+    for (const context of ["short", "long"]) {
+      const rates = contexts[context];
+      if (!rates || typeof rates !== "object" || Array.isArray(rates)) throw new Error(`Missing ${context} rates for ${model}`);
+      normalized[model][context] = {};
+      for (const field of ["input", "cachedInput", "cacheWrite", "output"]) {
+        if (typeof rates[field] !== "number" || !Number.isFinite(rates[field]) || rates[field] < 0) {
+          throw new Error(`Invalid ${context} ${field} rate for ${model}`);
+        }
+        normalized[model][context][field] = rates[field];
+      }
+    }
+  }
+  return { checkedAt, models: normalized };
+}
+
+export function setPricingCatalog(value) {
+  const catalog = validatePricingCatalog(value);
+  const hash = createHash("sha256").update(JSON.stringify(catalog)).digest("hex").slice(0, 12);
+  activePricing = { ...catalog, version: `${catalog.checkedAt}-${hash}` };
+  return getPricingCatalog();
+}
+
+export function resetPricingCatalog() {
+  activePricing = { checkedAt: API_PRICING_CHECKED_AT, version: API_PRICING_VERSION, models: MODEL_PRICES };
+}
+
 export function pricingVersionForTimestamp(_timestamp) {
-  return API_PRICING_VERSION;
+  return activePricing.version;
 }
 
 function finiteNonNegative(value) {
@@ -60,9 +113,9 @@ function usageFields(event = {}) {
 function normalizeModel(value) {
   const model = String(value || "Unknown model").trim() || "Unknown model";
   const lower = model.toLocaleLowerCase();
-  if (MODEL_PRICES[lower]) return { name: model, key: lower };
+  if (activePricing.models[lower]) return { name: model, key: lower };
   if (PRICE_ALIASES[lower]) return { name: model, key: PRICE_ALIASES[lower] };
-  for (const known of Object.keys(MODEL_PRICES)) {
+  for (const known of Object.keys(activePricing.models)) {
     if (lower.startsWith(`${known}-`)) return { name: model, key: known };
   }
   return { name: model, key: "" };
@@ -79,8 +132,8 @@ function estimateEventCost(event = {}) {
   const model = normalizeModel(event.model);
   const usage = usageFields(event);
   const total = usage.total || (usage.input || 0) + (usage.output || 0);
-  const version = PRICE_VERSIONS[event.priceVersion] ? event.priceVersion : API_PRICING_VERSION;
-  const ratesByContext = PRICE_VERSIONS[version][model.key];
+  const version = activePricing.version;
+  const ratesByContext = activePricing.models[model.key];
   const reasons = [];
   let inputUsd = 0;
   let cachedInputUsd = 0;
@@ -250,7 +303,7 @@ function summarizeCostItems(items = [], options = {}) {
     cacheWriteUnknownTokens: totals.cacheWriteUnknownTokens,
     cacheWriteUnknownRecords: totals.cacheWriteUnknownRecords,
     priceVersions: [...priceVersions].sort(),
-    priceCheckedAt: options.priceCheckedAt || API_PRICING_CHECKED_AT,
+    priceCheckedAt: options.priceCheckedAt || activePricing.checkedAt,
     priceMode: API_PRICING_MODE,
     priceSource: API_PRICING_SOURCE,
   };

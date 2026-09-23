@@ -124,6 +124,11 @@ label {
   min-height: 20px;
 }
 
+.auto-refresh-heading {
+  display: inline-flex;
+  align-items: center;
+}
+
 .auto-refresh-label {
   color: var(--muted);
 }
@@ -192,38 +197,27 @@ label {
 
 .timeline-legend {
   display: flex;
-  align-items: center;
   flex-wrap: wrap;
+  align-content: start;
   gap: 6px 12px;
+  min-width: 0;
   min-height: 25px;
   padding-top: 3px;
   color: var(--muted);
   font-size: 11px;
 }
 
-.timeline-legend-title {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.timeline-legend-list {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 5px 10px;
-}
-
 .timeline-legend-item {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 150px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .timeline-legend-item > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .timeline-legend-swatch {
@@ -232,30 +226,6 @@ label {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-}
-
-.timeline-legend-more {
-  position: relative;
-}
-
-.timeline-legend-more summary {
-  cursor: pointer;
-  color: var(--blue);
-  white-space: nowrap;
-}
-
-.timeline-legend-more[open] .timeline-legend-list {
-  position: absolute;
-  z-index: 2;
-  right: 0;
-  top: 22px;
-  width: max-content;
-  max-width: min(340px, 75vw);
-  padding: 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-  box-shadow: var(--shadow);
 }
 
 .usage-tooltip-note {
@@ -308,13 +278,42 @@ label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  white-space: nowrap;
+  width: 44px;
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+}
+
+.theme-toggle svg {
+  display: block;
+  width: 40px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.82;
+}
+
+.theme-toggle:hover svg {
+  opacity: 1;
 }
 
 .theme-toggle.active {
-  background: var(--green);
-  border-color: var(--green);
-  color: var(--active-ink);
+  background: transparent;
+  color: var(--green);
+}
+
+.theme-toggle.active svg {
+  opacity: 1;
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .toolbar {
@@ -619,14 +618,67 @@ select {
 }
 
 .price-metrics {
-  margin-bottom: 8px;
+  margin-bottom: 16px;
+}
+
+.pricing-note-panel {
+  margin-top: 16px;
+}
+
+.cost-estimate-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: start;
+  gap: 12px;
+}
+
+.cost-estimate-details {
+  min-width: 0;
+}
+
+.cost-estimate-details summary {
+  min-height: 30px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 30px;
+  cursor: pointer;
+}
+
+#costEstimateDate {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+#updatePricingButton {
+  height: 30px;
+  min-height: 30px;
+  white-space: nowrap;
 }
 
 .cost-estimate-note {
-  margin: 0 0 16px;
+  max-width: 100ch;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.cost-estimate-note p {
+  margin: 0 0 8px;
+}
+
+.cost-estimate-note ul {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+
+.cost-estimate-note li {
+  padding-left: 2px;
 }
 
 .comparison-strip {
@@ -673,11 +725,11 @@ select {
 }
 
 .comparison-item.up strong {
-  color: var(--red);
+  color: var(--green);
 }
 
 .comparison-item.down strong {
-  color: var(--green);
+  color: var(--red);
 }
 
 .metric,
@@ -706,9 +758,13 @@ select {
 
 .main-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(340px, 0.9fr);
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
   margin-bottom: 16px;
+}
+
+.main-grid > .chart-panel {
+  grid-column: span 2;
 }
 
 .period-comparison-grid {
@@ -822,7 +878,22 @@ select {
 }
 
 .comparison-row-name {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.repository-git-icon {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: var(--green);
+}
+
+.comparison-row-label {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -864,6 +935,10 @@ select {
   text-overflow: ellipsis;
   white-space: nowrap;
   cursor: pointer;
+}
+
+.comparison-total-zero {
+  color: var(--muted);
 }
 
 .comparison-total-button:hover,
@@ -942,17 +1017,20 @@ select {
 .channel-panel {
   display: flex;
   flex-direction: column;
-  height: 320px;
-  min-height: 0;
+  height: auto;
+  min-height: 320px;
   overflow: hidden;
 }
 
+.channel-panel > .panel-heading {
+  min-height: 30px;
+}
+
 .chart-panel canvas {
-  flex: 1;
-  min-height: 0;
   display: block;
+  flex: 0 0 220px;
   width: 100%;
-  height: auto;
+  height: 220px;
 }
 
 .channel-panel .bar-list {
@@ -1104,6 +1182,60 @@ select {
 .dialog form {
   display: grid;
   gap: 14px;
+}
+
+.pricing-dialog {
+  width: min(900px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+}
+
+.pricing-rows {
+  display: grid;
+  gap: 14px;
+  max-height: min(55vh, 560px);
+  overflow: auto;
+}
+
+.pricing-model {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.pricing-contexts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pricing-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pricing-context strong {
+  grid-column: 1 / -1;
+}
+
+.pricing-context label {
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.pricing-context input {
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .pricing-contexts { grid-template-columns: 1fr; }
+  .cost-estimate-tools { grid-template-columns: 1fr; }
+  #updatePricingButton { justify-self: start; }
 }
 
 .path-picker {
@@ -1264,5 +1396,11 @@ select {
 
   .metric strong {
     font-size: 20px;
+  }
+}
+
+@media (max-width: 1020px) {
+  .main-grid > .chart-panel {
+    grid-column: auto;
   }
 }

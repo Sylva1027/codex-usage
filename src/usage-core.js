@@ -180,11 +180,11 @@ async function exists(filePath) {
   }
 }
 
-function normalizeId(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
+function sourceId(kind, sourcePath) {
+  const normalizedPath = path.resolve(sourcePath).replace(/\\/g, "/");
+  const identity = process.platform === "win32" ? normalizedPath.toLowerCase() : normalizedPath;
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+  return `${kind}-${digest}`;
 }
 
 async function codexHomeLooksUsable(homePath) {
@@ -288,7 +288,7 @@ export async function discoverCodexHomes(options = {}) {
     }
     seen.add(resolved);
     homes.push({
-      id: normalizeId(`${kind}-${label}-${homes.length + 1}`),
+      id: sourceId(kind, resolved),
       label,
       path: resolved,
       kind,
@@ -334,7 +334,7 @@ export async function discoverUsageSources(options = {}) {
       }
       seenPaths.add(classified.path);
       sources.push({
-        id: normalizeId(`extra-${path.basename(classified.path) || "codex"}-${sources.length + 1}`),
+        id: sourceId("extra", classified.path),
         label: `Imported ${path.basename(classified.path) || classified.path}`,
         path: classified.path,
         kind: "extra",
@@ -352,7 +352,7 @@ export async function discoverUsageSources(options = {}) {
     }
     seenProjectLogs.add(classified.usageLogPath);
     sources.push({
-      id: normalizeId(`project-log-${path.basename(classified.path) || "project"}-${sources.length + 1}`),
+      id: sourceId("project-log", classified.usageLogPath),
       label: `Project ${path.basename(classified.path) || classified.path}`,
       path: classified.path,
       kind: "project-log",
@@ -534,6 +534,11 @@ export async function parseSessionFile(filePath, home, options = {}) {
       continue;
     }
 
+    const timestamp = row.timestamp || lastAt || firstAt;
+    if (!Number.isFinite(Date.parse(timestamp))) {
+      continue;
+    }
+
     tokenEventCount += 1;
     const channel = classifyChannel({
       originator: meta.originator,
@@ -545,7 +550,7 @@ export async function parseSessionFile(filePath, home, options = {}) {
     events.push({
       id: `${meta.id}:${tokenEventCount}`,
       sessionId: meta.id,
-      timestamp: row.timestamp || lastAt || firstAt,
+      timestamp,
       homeId: home.homeId || home.id,
       homeLabel: home.homeLabel || home.label,
       homePath: home.homePath || home.path,

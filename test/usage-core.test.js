@@ -240,6 +240,53 @@ test("parseSessionFile derives incremental token events from cumulative totals",
   assert.equal(parsed.session.channel, "JetBrains PyCharm");
 });
 
+test("source IDs stay attached to paths when the import list changes", async () => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), "codex-stable-sources-"));
+  const extraA = path.join(homeDir, "import-a");
+  const extraB = path.join(homeDir, "import-b");
+  await mkdir(path.join(homeDir, ".codex", "sessions"), { recursive: true });
+  await mkdir(path.join(extraA, "sessions"), { recursive: true });
+  await mkdir(path.join(extraB, "sessions"), { recursive: true });
+  const env = { CODEX_USAGE_HOMES: "", CODEX_USAGE_IMPORT_DIRS: "" };
+
+  const before = await discoverUsageSources({ homeDir, importDirs: [extraB], env });
+  const after = await discoverUsageSources({ homeDir, importDirs: [extraA, extraB], env });
+  const beforeB = before.find((source) => source.path === extraB);
+  const afterB = after.find((source) => source.path === extraB);
+
+  assert.ok(beforeB);
+  assert.ok(afterB);
+  assert.equal(beforeB.id, afterB.id);
+  assert.equal(before.find((source) => source.path === path.join(homeDir, ".codex")).id,
+    after.find((source) => source.path === path.join(homeDir, ".codex")).id);
+});
+
+test("full and streaming parsers both skip token events without valid timestamps", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "codex-invalid-time-"));
+  const file = path.join(root, "rollout.jsonl");
+  await writeFile(
+    file,
+    jsonl([
+      {
+        timestamp: "2026-05-01T01:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "invalid-time-session", source: "cli", cwd: "/work/project" },
+      },
+      tokenRow("not-a-timestamp", 100, 80, 10, 20),
+      tokenRow("2026-05-01T01:02:00.000Z", 150, 120, 20, 30),
+    ]),
+  );
+  const source = { id: "home", label: "Test", path: root };
+  const parsed = await parseSessionFile(file, source);
+  const streamed = [];
+  await streamUsageFileEvents(file, source, (event) => streamed.push(event));
+
+  assert.equal(parsed.events.length, 1);
+  assert.equal(streamed.length, 1);
+  assert.equal(parsed.events[0].total.total, streamed[0].usage.total);
+  assert.equal(parsed.events[0].total.total, 50);
+});
+
 test("discoverCodexHomes finds main Codex and JetBrains homes", async () => {
   const fakeHome = await mkdtemp(path.join(tmpdir(), "codex-home-"));
   await mkdir(path.join(fakeHome, ".codex", "sessions"), { recursive: true });

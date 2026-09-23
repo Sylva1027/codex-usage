@@ -22,10 +22,16 @@
       <header class="topbar">
         <div>
           <h1>Codex Usage</h1>
-          <p id="autoRefreshStatus" class="auto-refresh-status" aria-live="polite"><span class="auto-refresh-label">自动刷新</span><button id="autoRefreshToggle" type="button" aria-pressed="true">开</button><span id="autoRefreshInterval">每 60 秒</span><span id="lastSuccessfulCheck">上次成功检查：尚无</span><span id="autoRefreshError" class="auto-refresh-error"></span></p>
+          <p id="autoRefreshStatus" class="auto-refresh-status" aria-live="polite"><span class="auto-refresh-heading"><span id="autoRefreshInterval">60s</span><span class="auto-refresh-label">自动刷新</span></span><button id="autoRefreshToggle" type="button" aria-pressed="true">开</button><span id="lastSuccessfulCheck">上次：尚无</span><span id="autoRefreshError" class="auto-refresh-error"></span></p>
         </div>
         <div class="topbar-actions">
-          <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换主题" aria-pressed="false">浅色/深色</button>
+          <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换主题" aria-pressed="false">
+            <svg viewBox="0 0 44 24" aria-hidden="true" focusable="false">
+              <circle cx="11" cy="12" r="4" />
+              <path d="M11 1.8v2.1m0 16.2v2.1M.8 12h2.1m16.2 0h2.1M4.3 5.3l1.5 1.5m10.4 10.4 1.5 1.5M4.3 18.7l1.5-1.5M16.2 6.8l1.5-1.5" />
+              <g transform="translate(19 0)"><path d="M20.985 12.486A9 9 0 1 1 11.514 3.015c.405-.022.617.46.402.802a6 6 0 0 0 8.268 8.268c.344-.215.824-.004.803.402" /></g>
+            </svg>
+          </button>
           <button id="importButton" type="button">导入目录</button>
         </div>
       </header>
@@ -166,7 +172,7 @@
           <strong id="outputCost">—</strong>
         </article>
         <article class="metric">
-          <span>命中率</span>
+          <span>缓存命中</span>
           <strong id="cacheHitRate">—</strong>
         </article>
         <article class="metric">
@@ -174,8 +180,6 @@
           <strong id="priceModelCount">—</strong>
         </article>
       </section>
-      <p id="costEstimateNote" class="cost-estimate-note" aria-live="polite"></p>
-
       <section id="comparisonSummary" class="comparison-strip" aria-label="趋势变化"></section>
 
       <section class="main-grid">
@@ -192,7 +196,7 @@
             </div>
           </div>
           <canvas id="timelineChart" width="960" height="320" tabindex="0" role="img" aria-label="时间分布柱状图；聚焦后可查看用量详情"></canvas>
-          <div id="timelineLegend" class="timeline-legend" aria-label="图表图例"></div>
+          <div id="timelineLegend" class="timeline-legend" role="list" aria-label="图表图例"></div>
         </section>
 
         <section class="panel channel-panel">
@@ -235,6 +239,16 @@
         </div>
         <div id="homeList" class="home-list"></div>
       </section>
+
+      <section class="panel pricing-note-panel" aria-label="费用估算说明">
+        <div class="cost-estimate-tools">
+          <details id="costEstimateDetails" class="cost-estimate-details">
+            <summary>费用估算说明 <span id="costEstimateDate"></span></summary>
+            <div id="costEstimateNote" class="cost-estimate-note" aria-live="polite"></div>
+          </details>
+          <button id="updatePricingButton" class="panel-action" type="button">更新计价标准</button>
+        </div>
+      </section>
     </main>
     <div id="importDialog" class="dialog-backdrop" hidden>
       <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="importDialogTitle">
@@ -255,6 +269,24 @@
           <div class="dialog-actions">
             <button id="cancelImportButton" type="button">取消</button>
             <button id="submitImportButton" type="submit">导入</button>
+          </div>
+        </form>
+      </section>
+    </div>
+    <div id="pricingDialog" class="dialog-backdrop" hidden>
+      <section class="dialog pricing-dialog" role="dialog" aria-modal="true" aria-labelledby="pricingDialogTitle">
+        <form id="pricingForm">
+          <div class="dialog-heading">
+            <h2 id="pricingDialogTitle">更新计价标准</h2>
+            <button id="closePricingDialogButton" class="icon-button" type="button" aria-label="关闭">×</button>
+          </div>
+          <p class="dialog-copy">单价单位为美元 / 100 万 tokens。请对照 <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer">OpenAI API Standard 价格表</a>填写。保存后会用新单价重算历史估算。</p>
+          <label>价格核对日期 <input id="pricingCheckedAt" type="date" required /></label>
+          <div id="pricingRows" class="pricing-rows"></div>
+          <p id="pricingMessage" class="dialog-message" role="status"></p>
+          <div class="dialog-actions">
+            <button id="cancelPricingButton" type="button">取消</button>
+            <button id="savePricingButton" type="submit">保存并重算</button>
           </div>
         </form>
       </section>

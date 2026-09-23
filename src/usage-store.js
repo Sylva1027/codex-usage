@@ -196,6 +196,7 @@ export class UsageStore {
   async usageFiles(homes) {
     const files = [];
     const warnings = [];
+    const failedHomes = [];
     for (const home of homes) {
       try {
         if (home.kind === "project-log" && home.usageLogPath) {
@@ -206,10 +207,11 @@ export class UsageStore {
           files.push({ filePath, source: home, info: await stat(filePath) });
         }
       } catch (error) {
+        failedHomes.push({ id: home.id, path: home.path });
         warnings.push(`无法读取 ${home.path}: ${error.message}`);
       }
     }
-    return { files, warnings };
+    return { files, warnings, failedHomes };
   }
 
   async replaceFile({ filePath, source, info }) {
@@ -295,15 +297,19 @@ export class UsageStore {
     const homes = await discoverUsageSources(syncOptions);
 
     const status = await buildUsageFingerprint({ ...syncOptions, homes });
-    const { files, warnings } = await this.usageFiles(homes);
+    const { files, warnings, failedHomes = [] } = await this.usageFiles(homes);
     const knownFiles = new Set(files.map((file) => file.filePath));
+    const failedHomeIds = new Set(failedHomes.map((home) => home.id));
+    const failedHomePaths = new Set(failedHomes.map((home) => home.path));
     let updatedFileCount = 0;
 
     for (const file of files) {
       const existing = this.database
-        .prepare("SELECT size, mtime_ms FROM source_files WHERE path = ?")
+        .prepare("SELECT size, mtime_ms, kind, home_id, home_label, home_path FROM source_files WHERE path = ?")
         .get(file.filePath);
-      if (existing && Number(existing.size) === file.info.size && Number(existing.mtime_ms) === file.info.mtimeMs) {
+      if (existing && Number(existing.size) === file.info.size && Number(existing.mtime_ms) === file.info.mtimeMs &&
+          existing.kind === (file.source.kind || "codex") && existing.home_id === file.source.id &&
+          existing.home_label === file.source.label && existing.home_path === file.source.path) {
         continue;
       }
       try {
@@ -314,8 +320,8 @@ export class UsageStore {
       }
     }
 
-    for (const row of this.database.prepare("SELECT path FROM source_files").all()) {
-      if (!knownFiles.has(row.path)) {
+    for (const row of this.database.prepare("SELECT path, home_id, home_path FROM source_files").all()) {
+      if (!knownFiles.has(row.path) && !failedHomeIds.has(row.home_id) && !failedHomePaths.has(row.home_path)) {
         this.database.prepare("DELETE FROM source_files WHERE path = ?").run(row.path);
       }
     }

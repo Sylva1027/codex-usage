@@ -130,6 +130,48 @@ test("UsageStore 汇总结果与内存索引保持一致", async () => {
   }
 });
 
+test("UsageStore reindexes a file when its source identity changes", async () => {
+  const { homeDir, databaseFile } = await makeStoreFixture();
+  const store = new UsageStore({ homeDir, databaseFile });
+
+  try {
+    await store.sync();
+    store.database.prepare("UPDATE source_files SET home_id = ?").run("legacy-order-based-id");
+
+    const result = await store.sync();
+    const source = store.database.prepare("SELECT home_id FROM source_files").get();
+    const activeHome = store.homes.find((home) => home.kind === "main");
+
+    assert.equal(result.updatedFileCount, 1);
+    assert.equal(source.home_id, activeHome.id);
+    assert.equal(store.metadata().eventCount, 1);
+  } finally {
+    store.close();
+  }
+});
+
+test("UsageStore preserves indexed data when a source scan fails", async () => {
+  const { homeDir, databaseFile } = await makeStoreFixture();
+  const store = new UsageStore({ homeDir, databaseFile });
+
+  try {
+    await store.sync();
+    store.usageFiles = async (homes) => ({
+      files: [],
+      warnings: ["simulated source scan failure"],
+      failedHomes: homes.map(({ id, path }) => ({ id, path })),
+    });
+
+    const result = await store.sync();
+
+    assert.equal(result.updatedFileCount, 0);
+    assert.equal(store.metadata().eventCount, 1);
+    assert.match(store.warnings[0], /simulated source scan failure/);
+  } finally {
+    store.close();
+  }
+});
+
 test("UsageStore upgrades schema v2 and reindexes old source files with unknown billing fields", async () => {
   const { homeDir, databaseFile } = await makeStoreFixture();
   const initial = new UsageStore({ homeDir, databaseFile });
