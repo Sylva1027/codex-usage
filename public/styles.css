@@ -171,6 +171,11 @@ label {
   align-items: center;
 }
 
+.timeline-range-warning {
+  margin: 0 0 8px;
+  color: var(--red);
+}
+
 .timeline-title {
   display: flex;
   align-items: baseline;

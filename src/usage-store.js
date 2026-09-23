@@ -16,7 +16,7 @@ import {
   usageComparisonFromAggregates,
 } from "./usage-core.js";
 import { createRepositoryResolver } from "./repository-identity.js";
-import { estimateCostForEvents, estimateEventCost } from "./pricing.js";
+import { createCostEstimateAccumulator, estimateCostForEvents, estimateEventCost } from "./pricing.js";
 import { buildTimelineRows } from "../public/timeline-utils.js";
 
 const STORE_SCHEMA_VERSION = 3;
@@ -60,6 +60,8 @@ function rangeParameters(range) {
 export class UsageStore {
   constructor(options = {}) {
     this.options = options;
+    this.metadataCache = null;
+    this.periodComparisonCache = new Map();
     this.databaseFile =
       options.databaseFile || path.join(options.homeDir || os.homedir(), ".codex-usage", "usage-index.sqlite");
     this.database = null;
@@ -75,6 +77,8 @@ export class UsageStore {
     if (this.database) {
       return;
     }
+    this.metadataCache = null;
+    this.periodComparisonCache.clear();
     await mkdir(path.dirname(this.databaseFile), { recursive: true });
     this.database = new DatabaseSync(this.databaseFile);
     this.database.exec(`
@@ -296,8 +300,8 @@ export class UsageStore {
     this.options = syncOptions;
     const homes = await discoverUsageSources(syncOptions);
 
-    const status = await buildUsageFingerprint({ ...syncOptions, homes });
     const { files, warnings, failedHomes = [] } = await this.usageFiles(homes);
+    const status = await buildUsageFingerprint({ ...syncOptions, homes, scannedFiles: files, failedHomes });
     const knownFiles = new Set(files.map((file) => file.filePath));
     const failedHomeIds = new Set(failedHomes.map((home) => home.id));
     const failedHomePaths = new Set(failedHomes.map((home) => home.path));
@@ -333,10 +337,13 @@ export class UsageStore {
     this.checkedAt = status.checkedAt;
     this.writeMeta("generated_at", this.generatedAt);
     this.writeMeta("fingerprint", this.fingerprint);
+    this.metadataCache = null;
+    this.periodComparisonCache.clear();
     return { ...status, updatedFileCount };
   }
 
   metadata() {
+    if (this.metadataCache) return structuredClone(this.metadataCache);
     const totals = this.database
       .prepare("SELECT COUNT(*) AS event_count, COUNT(DISTINCT session_id) AS session_count FROM events")
       .get();
@@ -349,7 +356,7 @@ export class UsageStore {
         .all()
         .map((row) => [row.home_id, row]),
     );
-    return {
+    this.metadataCache = {
       generatedAt: this.generatedAt,
       eventCount: Number(totals.event_count || 0),
       sessionCount: Number(totals.session_count || 0),
@@ -365,6 +372,7 @@ export class UsageStore {
       }),
       warnings: this.warnings,
     };
+    return structuredClone(this.metadataCache);
   }
 
   aggregateRange(range) {
@@ -436,7 +444,7 @@ export class UsageStore {
     return estimateCostForEvents(events());
   }
 
-  timelineRange(range, bucket) {
+  timelineRange(range, bucket, { onEstimate } = {}) {
     const statement = this.database.prepare("SELECT timestamp_ms, session_id, channel, model, detail_mask, cache_write_tokens, cache_write_known, request_input_tokens, context_level, service_tier, price_version, total, input, cached, output, reasoning FROM events WHERE (? IS NULL OR timestamp_ms >= ?) AND (? IS NULL OR timestamp_ms <= ?)");
     function* events() {
       for (const row of statement.iterate(...rangeParameters(range))) {
@@ -456,7 +464,7 @@ export class UsageStore {
         };
       }
     }
-    return buildTimelineRows(events(), range, bucket, { estimateCost: estimateEventCost });
+    return buildTimelineRows(events(), range, bucket, { estimateCost: estimateEventCost, onEstimate });
   }
 
   repositoriesRange(range) {
@@ -552,6 +560,9 @@ export class UsageStore {
 
   periodComparison(options = {}) {
     const now = options.now ? new Date(options.now) : new Date();
+    const cacheKey = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+    const cached = this.periodComparisonCache.get(cacheKey);
+    if (cached) return { ...structuredClone(cached), asOf: now.toISOString() };
     const bounds = this.database.prepare("SELECT MIN(timestamp_ms) AS minimum, MAX(timestamp_ms) AS maximum FROM events").get();
     const timestamps = bounds.minimum === null
       ? []
@@ -562,22 +573,34 @@ export class UsageStore {
     const ranges = Object.fromEntries(
       COMPARISON_PERIOD_KEYS.map((key) => [key, resolveDateRange({ preset: key, now }, timestamps)]),
     );
-    return {
-      asOf: now.toISOString(),
+    const models = this.periodAggregate("model", "model", now, ranges);
+    const totals = models.length
+      ? Object.fromEntries(COMPARISON_PERIOD_KEYS.map((period) => {
+          const periodTotals = {};
+          for (const model of models) {
+            for (const [field, value] of Object.entries(model.periods[period])) {
+              periodTotals[field] = (periodTotals[field] || 0) + value;
+            }
+          }
+          return [period, periodTotals];
+        }))
+      : this.periodAggregate(null, null, now, ranges)[0].periods;
+    const value = {
       periods: COMPARISON_PERIOD_KEYS.map((key) => ({
         key,
         start: ranges[key].start?.toISOString() || null,
         end: ranges[key].end?.toISOString() || null,
       })),
-      totals: this.periodAggregate(null, null, now, ranges)[0].periods,
-      models: this.periodAggregate("model", "model", now, ranges),
-      repositories: this.periodAggregate("repository_key", "repository_path", now, ranges, {
-        includeKind: true,
-      }),
+      totals,
+      models,
+      repositories: this.periodAggregate("repository_key", "repository_path", now, ranges, { includeKind: true }),
     };
+    this.periodComparisonCache.clear();
+    this.periodComparisonCache.set(cacheKey, value);
+    return { ...structuredClone(value), asOf: now.toISOString() };
   }
 
-  summarize(filters = {}) {
+  summarize(filters = {}, { includeDetails = true } = {}) {
     const bounds = this.database.prepare("SELECT MIN(timestamp_ms) AS minimum, MAX(timestamp_ms) AS maximum FROM events").get();
     const boundaryEvents = [];
     if (bounds.minimum !== null) {
@@ -600,7 +623,21 @@ export class UsageStore {
       now: filters.now ? new Date(filters.now) : new Date(),
     });
     const bucket = filters.bucket || "day";
-    return {
+    let timeline = [];
+    let timelineError = null;
+    let costEstimate;
+    const costAccumulator = createCostEstimateAccumulator();
+    try {
+      timeline = this.timelineRange(range, bucket, {
+        onEstimate: (event, estimate) => costAccumulator.add(event, estimate),
+      });
+      costEstimate = costAccumulator.result();
+    } catch (error) {
+      if (error.code !== "TIMELINE_RANGE_TOO_LARGE") throw error;
+      timelineError = error.message;
+      costEstimate = this.costEstimateRange(range);
+    }
+    const summary = {
       generatedAt: this.generatedAt,
       range: {
         preset: range.preset,
@@ -611,17 +648,21 @@ export class UsageStore {
       },
       totals,
       comparison,
-      costEstimate: this.costEstimateRange(range),
+      costEstimate,
       eventCount: Number(aggregate.event_count || 0),
       sessionCount: Number(aggregate.session_count || 0),
       homeCount: Number(aggregate.home_count || 0),
-      timeline: this.timelineRange(range, bucket),
+      timeline,
+      timelineError,
       channels: this.groupedRange("channel", range),
-      homes: this.groupedRange("home_label", range),
       models: this.groupedRange("model", range),
-      projects: this.groupedRange("project", range),
-      repositories: this.repositoriesRange(range),
     };
+    if (includeDetails) {
+      summary.homes = this.groupedRange("home_label", range);
+      summary.projects = this.groupedRange("project", range);
+      summary.repositories = this.repositoriesRange(range);
+    }
+    return summary;
   }
 
   close() {

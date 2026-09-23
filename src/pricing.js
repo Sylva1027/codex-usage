@@ -231,7 +231,7 @@ function estimateEventCost(event = {}) {
   };
 }
 
-function summarizeCostItems(items = [], options = {}) {
+function createCostSummaryState(options = {}) {
   const totals = {
     inputUsd: 0,
     cachedInputUsd: 0,
@@ -256,8 +256,7 @@ function summarizeCostItems(items = [], options = {}) {
   const unpricedReasons = new Set();
   const priceVersions = new Set();
 
-  for (const item of items) {
-    const estimate = estimateEventCost(item);
+  function add(item, estimate = estimateEventCost(item)) {
     for (const field of [
       "inputUsd", "cachedInputUsd", "cacheWriteInputUsd", "outputUsd", "cacheRateInput", "cacheRateCached",
       "pricedTokens", "unpricedTokens", "serviceTierUnknownTokens", "contextUnknownTokens", "cacheWriteUnknownTokens",
@@ -281,32 +280,46 @@ function summarizeCostItems(items = [], options = {}) {
     }
   }
 
-  const hasPricedRecords = totals.pricedRecords > 0;
-  return {
-    totalUsd: hasPricedRecords ? totals.totalUsd : null,
-    inputUsd: hasPricedRecords ? totals.inputUsd : null,
-    cachedInputUsd: hasPricedRecords ? totals.cachedInputUsd : null,
-    cacheWriteInputUsd: hasPricedRecords ? totals.cacheWriteInputUsd : null,
-    outputUsd: hasPricedRecords ? totals.outputUsd : null,
-    cacheHitRate: totals.cacheRateInput > 0 ? totals.cacheRateCached / totals.cacheRateInput : null,
-    modelCount: models.size,
-    pricedTokens: totals.pricedTokens,
-    unpricedTokens: totals.unpricedTokens,
-    pricedRecords: totals.pricedRecords,
-    unpricedRecords: totals.unpricedRecords,
-    unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
-    unpricedReasons: [...unpricedReasons].sort(),
-    serviceTierUnknownTokens: totals.serviceTierUnknownTokens,
-    serviceTierUnknownRecords: totals.serviceTierUnknownRecords,
-    contextUnknownTokens: totals.contextUnknownTokens,
-    contextUnknownRecords: totals.contextUnknownRecords,
-    cacheWriteUnknownTokens: totals.cacheWriteUnknownTokens,
-    cacheWriteUnknownRecords: totals.cacheWriteUnknownRecords,
-    priceVersions: [...priceVersions].sort(),
-    priceCheckedAt: options.priceCheckedAt || activePricing.checkedAt,
-    priceMode: API_PRICING_MODE,
-    priceSource: API_PRICING_SOURCE,
-  };
+  function result() {
+    const hasPricedRecords = totals.pricedRecords > 0;
+    return {
+      totalUsd: hasPricedRecords ? totals.totalUsd : null,
+      inputUsd: hasPricedRecords ? totals.inputUsd : null,
+      cachedInputUsd: hasPricedRecords ? totals.cachedInputUsd : null,
+      cacheWriteInputUsd: hasPricedRecords ? totals.cacheWriteInputUsd : null,
+      outputUsd: hasPricedRecords ? totals.outputUsd : null,
+      cacheHitRate: totals.cacheRateInput > 0 ? totals.cacheRateCached / totals.cacheRateInput : null,
+      modelCount: models.size,
+      pricedTokens: totals.pricedTokens,
+      unpricedTokens: totals.unpricedTokens,
+      pricedRecords: totals.pricedRecords,
+      unpricedRecords: totals.unpricedRecords,
+      unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
+      unpricedReasons: [...unpricedReasons].sort(),
+      serviceTierUnknownTokens: totals.serviceTierUnknownTokens,
+      serviceTierUnknownRecords: totals.serviceTierUnknownRecords,
+      contextUnknownTokens: totals.contextUnknownTokens,
+      contextUnknownRecords: totals.contextUnknownRecords,
+      cacheWriteUnknownTokens: totals.cacheWriteUnknownTokens,
+      cacheWriteUnknownRecords: totals.cacheWriteUnknownRecords,
+      priceVersions: [...priceVersions].sort(),
+      priceCheckedAt: options.priceCheckedAt || activePricing.checkedAt,
+      priceMode: API_PRICING_MODE,
+      priceSource: API_PRICING_SOURCE,
+    };
+  }
+
+  return { add, result };
+}
+
+export function createCostEstimateAccumulator(options = {}) {
+  return createCostSummaryState(options);
+}
+
+function summarizeCostItems(items = [], options = {}) {
+  const summary = createCostSummaryState(options);
+  for (const item of items) summary.add(item);
+  return summary.result();
 }
 
 function modelNameIsKnown(value) {

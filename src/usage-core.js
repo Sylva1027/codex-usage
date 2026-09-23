@@ -6,7 +6,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import { createRepositoryResolver } from "./repository-identity.js";
-import { estimateCostForEvents, estimateEventCost, LONG_CONTEXT_INPUT_THRESHOLD, pricingVersionForTimestamp } from "./pricing.js";
+import { createCostEstimateAccumulator, estimateCostForEvents, estimateEventCost, LONG_CONTEXT_INPUT_THRESHOLD, pricingVersionForTimestamp } from "./pricing.js";
 import { buildTimelineRows } from "../public/timeline-utils.js";
 
 const SESSION_DIRS = ["sessions", "archived_sessions"];
@@ -393,21 +393,43 @@ export async function buildUsageFingerprint(options = {}) {
   const homes = options.homes || (await discoverUsageSources(options));
   const hash = createHash("sha256");
   let fileCount = 0;
+  const scannedByHome = new Map();
+  for (const entry of options.scannedFiles || []) {
+    const files = scannedByHome.get(entry.source.id) || [];
+    files.push(entry);
+    scannedByHome.set(entry.source.id, files);
+  }
+  const failedHomeIds = new Set((options.failedHomes || []).map((home) => home.id));
+
+  async function addFile(filePath, info = null) {
+    try {
+      const details = info || await stat(filePath);
+      fileCount += 1;
+      hash.update(`${filePath}\t${details.size}\t${details.mtimeMs}\n`);
+    } catch (error) {
+      hash.update(`${filePath}\t!${error.code || "unreadable"}\n`);
+    }
+  }
 
   for (const home of homes) {
     hash.update(`${home.id}\t${home.label}\t${home.path}\t${home.kind || ""}\t${home.usageLogPath || ""}\n`);
-    if (home.kind === "project-log" && home.usageLogPath) {
-      const info = await stat(home.usageLogPath);
-      fileCount += 1;
-      hash.update(`${home.usageLogPath}\t${info.size}\t${info.mtimeMs}\n`);
+    if (Array.isArray(options.scannedFiles)) {
+      for (const entry of scannedByHome.get(home.id) || []) await addFile(entry.filePath, entry.info);
+      if (failedHomeIds.has(home.id)) hash.update("!scan-failed\n");
       continue;
     }
-    const files = await discoverSessionFiles(home.path);
-    for (const file of files) {
-      const info = await stat(file);
-      fileCount += 1;
-      hash.update(`${file}\t${info.size}\t${info.mtimeMs}\n`);
+    if (home.kind === "project-log" && home.usageLogPath) {
+      await addFile(home.usageLogPath);
+      continue;
     }
+    let files;
+    try {
+      files = await discoverSessionFiles(home.path);
+    } catch (error) {
+      hash.update(`!discover-failed:${error.code || "unreadable"}\n`);
+      continue;
+    }
+    for (const file of files) await addFile(file);
   }
 
   return {
@@ -419,20 +441,22 @@ export async function buildUsageFingerprint(options = {}) {
 }
 
 export function classifyChannel({ originator, source, homeLabel }) {
-  const text = `${originator || ""} ${source || ""} ${homeLabel || ""}`.toLowerCase();
+  const normalize = (value) => String(value || "").toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const normalizedSource = normalize(source);
+  const text = `${normalize(originator)} ${normalizedSource} ${normalize(homeLabel)}`;
   if (text.includes("jetbrains")) {
     return "JetBrains PyCharm";
   }
   if (text.includes("codex desktop")) {
     return "Codex Desktop";
   }
-  if (source === "cli" || text.includes("codex-tui") || text.includes("codex_cli")) {
+  if (normalizedSource === "cli" || text.includes("codex tui") || text.includes("codex cli")) {
     return "CLI";
   }
-  if (source === "exec" || text.includes("codex_exec")) {
+  if (normalizedSource === "exec" || text.includes("codex exec")) {
     return "Codex Exec";
   }
-  if (source === "vscode") {
+  if (normalizedSource === "vscode" || /(^|\s)(vscode|vs code)(\s|$)/.test(text) || text.includes("chrome extension")) {
     return "Editor Integration";
   }
   return originator || source || homeLabel || "Unknown";
@@ -1063,8 +1087,8 @@ export async function buildUsageReport(options = {}) {
     }
   }
 
-  events.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
-  sessions.sort((a, b) => String(a.lastAt).localeCompare(String(b.lastAt)));
+  events.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  sessions.sort((a, b) => Date.parse(a.lastAt) - Date.parse(b.lastAt));
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1812,6 +1836,15 @@ export function summarizePeriodComparison(events = [], options = {}) {
   };
 }
 
+function buildTimelineRowsWithLimit(events, range, bucket, options = {}) {
+  try {
+    return { timeline: buildTimelineRows(events, range, bucket, options), timelineError: null };
+  } catch (error) {
+    if (error.code !== "TIMELINE_RANGE_TOO_LARGE") throw error;
+    return { timeline: [], timelineError: error.message };
+  }
+}
+
 export function summarizeUsageIndex(index, filters = {}) {
   const bucket = filters.bucket || "day";
   const strings = index.strings;
@@ -1841,21 +1874,37 @@ export function summarizeUsageIndex(index, filters = {}) {
     currentTotals: totals,
     now,
   });
-  const timelineEvents = events.map((event) => ({
-    timestamp: event.t,
-    sessionId: strings[event.s] || String(event.s),
-    channel: strings[event.c] || "Unknown",
-    model: strings[event.m] || "Unknown model",
-    total: { total: event.total, input: event.input, cached: event.cached, output: event.output, reasoning: event.reasoning },
-    detailMask: event.detailMask,
-    cacheWriteTokens: event.cacheWriteTokens,
-    cacheWriteKnown: Boolean(event.cacheWriteKnown),
-    contextLevel: strings[event.contextLevel] || event.contextLevel,
-    requestInputTokens: event.requestInputTokens,
-    serviceTier: strings[event.serviceTier] || event.serviceTier,
-    priceVersion: strings[event.priceVersion] || event.priceVersion,
-  }));
-  const timeline = buildTimelineRows(timelineEvents, range, bucket, { estimateCost: estimateEventCost });
+  function* timelineEvents() {
+    for (const event of events) {
+      yield {
+        timestamp: event.t,
+        sessionId: strings[event.s] || String(event.s),
+        channel: strings[event.c] || "Unknown",
+        model: strings[event.m] || "Unknown model",
+        total: { total: event.total, input: event.input, cached: event.cached, output: event.output, reasoning: event.reasoning },
+        detailMask: event.detailMask,
+        cacheWriteTokens: event.cacheWriteTokens,
+        cacheWriteKnown: Boolean(event.cacheWriteKnown),
+        contextLevel: strings[event.contextLevel] || event.contextLevel,
+        requestInputTokens: event.requestInputTokens,
+        serviceTier: strings[event.serviceTier] || event.serviceTier,
+        priceVersion: strings[event.priceVersion] || event.priceVersion,
+      };
+    }
+  }
+  const costAccumulator = createCostEstimateAccumulator();
+  const { timeline, timelineError } = buildTimelineRowsWithLimit(
+    timelineEvents(),
+    range,
+    bucket,
+    {
+      estimateCost: estimateEventCost,
+      onEstimate: (event, estimate) => costAccumulator.add(event, estimate),
+    },
+  );
+  const costEstimate = timelineError
+    ? estimateCostForEvents(timelineEvents())
+    : costAccumulator.result();
 
   return {
     generatedAt: index.generatedAt,
@@ -1868,26 +1917,12 @@ export function summarizeUsageIndex(index, filters = {}) {
     },
     totals,
     comparison,
-    costEstimate: estimateCostForEvents(events.map((event) => ({
-      model: strings[event.m] || "Unknown model",
-      detailMask: event.detailMask,
-      cacheWriteTokens: event.cacheWriteTokens,
-      cacheWriteKnown: event.cacheWriteKnown,
-      requestInputTokens: event.requestInputTokens,
-      contextLevel: strings[event.contextLevel] || event.contextLevel,
-      serviceTier: strings[event.serviceTier] || event.serviceTier,
-      priceVersion: strings[event.priceVersion] || event.priceVersion,
-      total: {
-        total: event.total,
-        input: event.input,
-        cached: event.cached,
-        output: event.output,
-      },
-    }))),
+    costEstimate,
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.h)).size,
     timeline,
+    timelineError,
     channels: groupIndexedEvents(index, events, (event) => strings[event.c]),
     homes: groupIndexedEvents(index, events, (event) => strings[event.l]),
     models: groupIndexedEvents(index, events, (event) => strings[event.m] || "Unknown model"),
@@ -1925,7 +1960,17 @@ export function summarizeUsage(report, filters = {}) {
     currentTotals: totals,
     now,
   });
-  const timeline = buildTimelineRows(events, range, bucket, { estimateCost: estimateEventCost });
+  const costAccumulator = createCostEstimateAccumulator();
+  const { timeline, timelineError } = buildTimelineRowsWithLimit(
+    events,
+    range,
+    bucket,
+    {
+      estimateCost: estimateEventCost,
+      onEstimate: (event, estimate) => costAccumulator.add(event, estimate),
+    },
+  );
+  const costEstimate = timelineError ? estimateCostForEvents(events) : costAccumulator.result();
 
   return {
     generatedAt: report.generatedAt,
@@ -1938,11 +1983,12 @@ export function summarizeUsage(report, filters = {}) {
     },
     totals,
     comparison,
-    costEstimate: estimateCostForEvents(events),
+    costEstimate,
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.homeId)).size,
     timeline,
+    timelineError,
     channels: groupByUsage(events, (event) => event.channel),
     homes: groupByUsage(events, (event) => event.homeLabel),
     models: groupByUsage(events, (event) => event.model || "Unknown model"),

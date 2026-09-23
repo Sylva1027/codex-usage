@@ -1,4 +1,4 @@
-import { buildTimelineRows } from "./timeline-utils.js";
+import { buildTimelineRows, MAX_TIMELINE_SLOTS } from "./timeline-utils.js";
 
 const state = {
   report: null,
@@ -806,7 +806,14 @@ export function summarize(report) {
     return true;
   });
   const totals = events.reduce((sum, event) => addUsage(sum, event.total), emptyUsage());
-  const timeline = buildTimelineRows(events, range, state.bucket);
+  let timeline = [];
+  let timelineError = null;
+  try {
+    timeline = buildTimelineRows(events, range, state.bucket);
+  } catch (error) {
+    if (error.code !== "TIMELINE_RANGE_TOO_LARGE") throw error;
+    timelineError = error.message;
+  }
   const channels = groupEvents(events, (event) => event.channel).sort((a, b) => b.total.total - a.total.total);
   const projects = groupEvents(events, (event) => event.cwd || "Unknown cwd").sort((a, b) => b.total.total - a.total.total);
   const repositories = groupRepositoryEvents(events);
@@ -817,6 +824,7 @@ export function summarize(report) {
     costEstimate: summarizeEmbeddedCostEstimates(events, report.pricing),
     comparison: summarizeComparison(report.events, range, totals),
     timeline,
+    timelineError,
     channels,
     projects,
     repositories,
@@ -1093,7 +1101,7 @@ export function renderPeriodComparisonTableHtml(rows = [], options = {}) {
     const isExpanded = expanded?.kind === kind && expanded?.key === row.key;
     const activeMetrics = isExpanded ? row.periods?.[expanded.period] : null;
     return `
-      <tr><th scope="row"><span class="comparison-row-name">${repositoryIcon}<span class="comparison-row-label">${escapeHtml(displayName)}</span></span></th>${cells}</tr>
+      <tr><th scope="row"><span class="comparison-row-name">${repositoryIcon}<span class="comparison-row-label" title="${escapeHtml(row.name)}" aria-label="${escapeHtml(row.name)}">${escapeHtml(displayName)}</span></span></th>${cells}</tr>
       ${activeMetrics ? `<tr class="comparison-detail-row"><td id="${rowId}-detail" colspan="5">${renderPeriodDetailHtml(activeMetrics, expanded.period)}</td></tr>` : ""}
     `;
   }).join("");
@@ -1737,17 +1745,21 @@ function metadataFromReport(report) {
   };
 }
 
+let staticSummaryCache = null;
+
 function currentSummary() {
   if (state.report) {
-    return summarize(state.report);
+    const nowKey = state.now ? new Date(state.now).getTime() : Math.floor(Date.now() / 60_000);
+    const key = [state.preset, state.bucket, state.startDate, state.endDate, state.recentValue, nowKey].join("|");
+    if (staticSummaryCache?.report === state.report && staticSummaryCache.key === key) return staticSummaryCache.summary;
+    const summary = summarize(state.report);
+    staticSummaryCache = { report: state.report, key, summary };
+    return summary;
   }
   return state.summary;
 }
 
 function currentMetadata() {
-  if (state.report) {
-    return metadataFromReport(state.report);
-  }
   return state.metadata;
 }
 
@@ -1766,6 +1778,13 @@ function render() {
   const rangeStart = asDate(summary.range.start);
   const rangeEnd = asDate(summary.range.end);
   rangeNode.title = rangeStart && rangeEnd ? `${rangeStart.toLocaleString()} 至 ${rangeEnd.toLocaleString()}` : rangeNode.textContent;
+  const timelineWarning = $("#timelineRangeWarning");
+  if (timelineWarning) {
+    timelineWarning.hidden = !summary.timelineError;
+    timelineWarning.textContent = summary.timelineError
+      ? `此范围超过 ${MAX_TIMELINE_SLOTS.toLocaleString()} 个时间槽。请缩短日期范围或选择更大的时间粒度。`
+      : "";
+  }
   const channelColors = getChannelColors(summary.channels);
   const allPeriodModels = state.periodComparison?.models || [];
   const modelColors = getModelColors([...allPeriodModels, ...summary.models]);
@@ -2205,6 +2224,7 @@ function usageQuery({ skipCheck = false, freeze = false } = {}) {
   const params = new URLSearchParams({
     preset: state.preset,
     bucket: state.bucket,
+    view: "dashboard",
   });
   if (state.preset === "custom") {
     if (state.startDate) {
@@ -2244,7 +2264,11 @@ async function loadUsage({ skipCheck = false, freeze = false } = {}) {
       setAutoRefreshStatus("此静态快照不会轮询；运行 npm run export 可生成新快照");
     } else {
       const response = await fetch(`/api/usage${usageQuery({ skipCheck, freeze: freeze || (!state.autoRefreshEnabled && !state.snapshotId) })}`);
-      if (!response.ok) throw new Error(`API ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(`API ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
       const data = await response.json();
       if (loadId !== state.usageLoadId) return;
       state.report = null;
@@ -2260,6 +2284,12 @@ async function loadUsage({ skipCheck = false, freeze = false } = {}) {
     renderAutoRefreshControls();
     render();
   } catch (error) {
+    if (loadId === state.usageLoadId && error.status === 410 && state.snapshotId && !state.autoRefreshEnabled) {
+      state.snapshotId = null;
+      setAutoRefreshStatus("快照已回收，正在重新冻结…");
+      void loadUsage({ skipCheck: true, freeze: true });
+      return;
+    }
     if (loadId === state.usageLoadId) {
       setAutoRefreshStatus(`加载失败：${error.message}`, { error: true });
     }
@@ -2383,15 +2413,11 @@ function bootDashboard() {
   });
 
   $("#recentValue").addEventListener("focus", () => {
-    state.preset = "recent";
-    updatePresetButtons();
     setRecentMenuOpen(true);
   });
 
   $("#recentMenuButton").addEventListener("click", (event) => {
     event.stopPropagation();
-    state.preset = "recent";
-    updatePresetButtons();
     const shouldOpen = $("#recentRangeMenu").hidden;
     $("#recentValue").focus();
     setRecentMenuOpen(shouldOpen);
@@ -2495,7 +2521,15 @@ function bootDashboard() {
   $("#themeToggle").addEventListener("click", () => {
     setTheme(state.theme === "dark" ? "light" : "dark");
   });
-  window.addEventListener("resize", render);
+  let resizeRenderQueued = false;
+  window.addEventListener("resize", () => {
+    if (resizeRenderQueued) return;
+    resizeRenderQueued = true;
+    requestAnimationFrame(() => {
+      resizeRenderQueued = false;
+      render();
+    });
+  });
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.autoRefreshEnabled) {
       startAutoRefresh();

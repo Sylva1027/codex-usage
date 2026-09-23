@@ -175,13 +175,13 @@ function httpError(statusCode, message) {
   return error;
 }
 
-export async function readJsonBody(request) {
+export async function readJsonBody(request, { maxBytes = 16_384 } = {}) {
   const chunks = [];
   let byteLength = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     byteLength += buffer.length;
-    if (byteLength > 16_384) {
+    if (byteLength > maxBytes) {
       throw httpError(413, "Request body too large");
     }
     chunks.push(buffer);
@@ -335,7 +335,7 @@ export function createUsageServer(options = {}) {
         if (request.method === "PUT") {
           let catalog;
           try {
-            catalog = validatePricingCatalog(await readJsonBody(request));
+            catalog = validatePricingCatalog(await readJsonBody(request, { maxBytes: 128 * 1024 }));
           } catch (error) {
             throw httpError(error.statusCode || 400, error.message);
           }
@@ -478,7 +478,7 @@ export function createUsageServer(options = {}) {
           checkedAt: usage.checkedAt,
           snapshotId: frozen?.id || requestedSnapshotId || null,
           metadata: frozen?.metadata || await metadataForStore(),
-          summary: store.summarize(filters),
+          summary: store.summarize(filters, { includeDetails: url.searchParams.get("view") !== "dashboard" }),
           periodComparison: store.periodComparison({ now: asOf }),
         });
         return;

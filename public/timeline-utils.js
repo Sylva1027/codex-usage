@@ -48,18 +48,29 @@ function addCalendarDays(date, days) {
   return next;
 }
 
-function generateCalendarKeys(start, end, bucket, limit = 100_000) {
+export const MAX_TIMELINE_SLOTS = 2_000;
+
+function appendCalendarKey(keys, key, limit) {
+  if (keys.length >= limit) {
+    const error = new RangeError(`Time range exceeds ${limit} timeline slots.`);
+    error.code = "TIMELINE_RANGE_TOO_LARGE";
+    throw error;
+  }
+  keys.push(key);
+}
+
+function generateCalendarKeys(start, end, bucket, limit = MAX_TIMELINE_SLOTS) {
   const keys = [];
   if (!start || !end || end < start) return keys;
   if (bucket === "hour") {
     let cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate(), start.getHours());
     const last = new Date(end.getFullYear(), end.getMonth(), end.getDate(), end.getHours());
     const seen = new Set();
-    while (cursor <= last && keys.length < limit) {
+    while (cursor <= last) {
       const key = timelineBucketKey(cursor, bucket);
       if (!seen.has(key)) {
         seen.add(key);
-        keys.push(key);
+        appendCalendarKey(keys, key, limit);
       }
       cursor.setHours(cursor.getHours() + 1);
     }
@@ -68,8 +79,8 @@ function generateCalendarKeys(start, end, bucket, limit = 100_000) {
   if (bucket === "day") {
     let cursor = startOfDay(start);
     const last = startOfDay(end);
-    while (cursor <= last && keys.length < limit) {
-      keys.push(timelineBucketKey(cursor, bucket));
+    while (cursor <= last) {
+      appendCalendarKey(keys, timelineBucketKey(cursor, bucket), limit);
       cursor = addCalendarDays(cursor, 1);
     }
     return keys;
@@ -77,8 +88,8 @@ function generateCalendarKeys(start, end, bucket, limit = 100_000) {
   if (bucket === "week") {
     let cursor = startOfWeek(start);
     const last = startOfWeek(end);
-    while (cursor <= last && keys.length < limit) {
-      keys.push(timelineBucketKey(cursor, bucket));
+    while (cursor <= last) {
+      appendCalendarKey(keys, timelineBucketKey(cursor, bucket), limit);
       cursor = addCalendarDays(cursor, 7);
     }
     return keys;
@@ -86,8 +97,8 @@ function generateCalendarKeys(start, end, bucket, limit = 100_000) {
   if (bucket === "month") {
     let cursor = new Date(start.getFullYear(), start.getMonth(), 1);
     const last = new Date(end.getFullYear(), end.getMonth(), 1);
-    while (cursor <= last && keys.length < limit) {
-      keys.push(timelineBucketKey(cursor, bucket));
+    while (cursor <= last) {
+      appendCalendarKey(keys, timelineBucketKey(cursor, bucket), limit);
       cursor.setMonth(cursor.getMonth() + 1, 1);
     }
   }
@@ -161,6 +172,8 @@ function materializeSegments(groups) {
 }
 
 export function buildTimelineRows(events = [], range = {}, bucket = "day", options = {}) {
+  const hasBoundedRange = Boolean(asDate(range?.start) && asDate(range?.end));
+  const rangedKeys = hasBoundedRange ? slotKeys(range, bucket, []) : null;
   const rowsByKey = new Map();
   const estimateCost = options.estimateCost || ((event) => event.costEstimate || null);
   for (const event of events) {
@@ -204,6 +217,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
 
     const estimate = estimateCost(event);
     if (estimate) {
+      options.onEstimate?.(event, estimate);
       row.estimatedRecords += 1;
       const cost = row.modelCosts.get(modelName) || {
         totalUsd: 0,
@@ -268,7 +282,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
   rows.sort((a, b) => a.key.localeCompare(b.key));
 
   const byKey = new Map(rows.map((row) => [row.key, row]));
-  const ordered = slotKeys(range, bucket, rows).map((key) => byKey.get(key) || emptyRow(key));
+  const ordered = (rangedKeys || slotKeys(range, bucket, rows)).map((key) => byKey.get(key) || emptyRow(key));
   const included = new Set(ordered.map((row) => row.key));
   for (const row of rows) if (!included.has(row.key)) ordered.push(row);
   return ordered;
