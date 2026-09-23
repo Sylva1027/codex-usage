@@ -10,19 +10,28 @@ function sourceBetween(source, startFunction, endFunction) {
   return source.slice(startIndex, endIndex);
 }
 
-test("auto refresh keeps checking while the page is hidden", async () => {
+test("auto refresh preference gates polling, preserves manual refresh, and disables static snapshots", async () => {
   const source = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  const checkSource = sourceBetween(source, "checkForUpdates", "startAutoRefresh");
-  const startSource = sourceBetween(source, "startAutoRefresh", "refreshViewForFilters");
-  const visibilitySource = source.slice(
-    source.indexOf('document.addEventListener("visibilitychange"'),
-    source.indexOf("setTheme(preferredTheme()", source.indexOf('document.addEventListener("visibilitychange"')),
-  );
+  const check = sourceBetween(source, "checkForUpdates", "startAutoRefresh");
+  const start = sourceBetween(source, "startAutoRefresh", "stopAutoRefresh");
+  const stop = sourceBetween(source, "stopAutoRefresh", "refreshViewForFilters");
+  const toggle = sourceBetween(source, "setAutoRefreshEnabled", "initializeAutoRefresh");
+  const initialize = sourceBetween(source, "initializeAutoRefresh", "setImportControlsDisabled");
+  const visibilityStart = source.indexOf('document.addEventListener("visibilitychange"');
+  const visibilityEnd = source.indexOf("setTheme(preferredTheme()", visibilityStart);
+  const visibility = source.slice(visibilityStart, visibilityEnd);
 
-  assert.doesNotMatch(checkSource, /document\.hidden/);
-  assert.doesNotMatch(checkSource, /loadUsage\(\{ force: true \}\)/);
-  assert.match(checkSource, /await loadUsage\(\)/);
-  assert.doesNotMatch(startSource, /document\.hidden/);
-  assert.doesNotMatch(visibilitySource, /stopAutoRefresh/);
-  assert.match(visibilitySource, /checkForUpdates\(\)/);
+  assert.match(source, /AUTO_REFRESH_STORAGE_KEY/);
+  assert.match(source, /localStorage\.setItem\(AUTO_REFRESH_STORAGE_KEY/);
+  assert.match(check, /isStaticSnapshot\(\).*state\.autoRefreshEnabled/s);
+  assert.match(check, /state\.autoRefreshCheckInFlight/);
+  assert.match(check, /runId !== state\.autoRefreshRunId/);
+  assert.match(check, /await loadUsage\(\)/);
+  assert.match(start, /state\.autoRefreshTimer/);
+  assert.match(stop, /window\.clearInterval/);
+  assert.match(toggle, /stopAutoRefresh\(\)/);
+  assert.match(toggle, /checkForUpdates\(\)/);
+  assert.match(initialize, /isStaticSnapshot\(\) \? false/);
+  assert.match(visibility, /!document\.hidden && state\.autoRefreshEnabled/);
+  assert.doesNotMatch(source, /force: true/);
 });

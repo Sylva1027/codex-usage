@@ -8,6 +8,8 @@ test("toolbar embeds the fillable recent dropdown inside the range segments", as
 
   assert.ok(html.indexOf('data-preset="all"') < html.indexOf('data-preset="recent"'));
   assert.ok(html.indexOf('data-preset="all"') < html.indexOf('id="recentValue"'));
+  assert.match(html, /data-preset="today" class="active">今日<\/button>/);
+  assert.match(html, /data-preset="all">全部<\/button>/);
   assert.ok(html.indexOf('id="recentValue"') < html.indexOf('data-preset="custom"'));
   assert.match(html, /<span class="recent-segment-label">最近<\/span>/);
   assert.doesNotMatch(html, /<button[^>]+data-preset="recent"[^>]*>最近<\/button>/);
@@ -26,9 +28,9 @@ test("toolbar embeds the fillable recent dropdown inside the range segments", as
   assert.match(html, /data-date-picker-button="end"/);
   // The granularity selector exposes hourly buckets before broader date buckets.
   assert.ok(html.indexOf('value="hour"') < html.indexOf('value="day"'));
-  assert.match(html, /<option value="hour">按小时<\/option>/);
-  // The dashboard still starts at daily granularity until the today preset is chosen.
-  assert.match(html, /<option value="day" selected>按天<\/option>/);
+  // Today's preset is the initial view, so its default hourly granularity is selected on first paint.
+  assert.match(html, /<option value="hour" selected>按小时<\/option>/);
+  assert.match(html, /<option value="day">按天<\/option>/);
   assert.match(css, /\.segmented\s+\.recent-segment\s+\.recent-segment-label\s*{[^}]*color:\s*inherit;/s);
   assert.match(css, /\.segmented\s+\.recent-segment\s*{[^}]*gap:\s*10px;/s);
   assert.match(css, /\.segmented\s+\.recent-segment\s*{[^}]*padding:\s*0 10px 0 14px;/s);

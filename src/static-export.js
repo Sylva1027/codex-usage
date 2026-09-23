@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildUsageReport } from "./usage-core.js";
+import { buildUsageReport, summarizePeriodComparison } from "./usage-core.js";
+import { API_PRICING_CHECKED_AT, API_PRICING_MODE, API_PRICING_SOURCE, estimateEventCost } from "./pricing.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -17,11 +18,24 @@ export function renderStaticDashboardHtml(report) {
   const indexHtml = readFileSync(path.join(PUBLIC_DIR, "index.html"), "utf8");
   const styles = readFileSync(path.join(PUBLIC_DIR, "styles.css"), "utf8");
   const app = readFileSync(path.join(PUBLIC_DIR, "app.js"), "utf8");
+  const timelineUtils = readFileSync(path.join(PUBLIC_DIR, "timeline-utils.js"), "utf8");
+  const inlineTimelineUtils = timelineUtils.replace(/^export\s+/gm, "");
+  const bundledApp = app.replace(/^import \{ buildTimelineRows \} from "\.\/timeline-utils\.js";\s*/m, "");
+  const periodComparison = summarizePeriodComparison(report.events, { now: report.generatedAt });
+  const pricedReport = {
+    ...report,
+    pricing: {
+      checkedAt: API_PRICING_CHECKED_AT,
+      mode: API_PRICING_MODE,
+      source: API_PRICING_SOURCE,
+    },
+    events: report.events.map((event) => ({ ...event, costEstimate: estimateEventCost(event) })),
+  };
   return indexHtml
     .replace('<link rel="stylesheet" href="/styles.css" />', `<style>\n${styles}\n</style>`)
     .replace(
       '<script src="/app.js" type="module"></script>',
-      `<script>window.__CODEX_USAGE_REPORT__ = ${safeScriptJson(report)};</script>\n<script type="module">\n${app}\n</script>`,
+      `<script>window.__CODEX_USAGE_REPORT__ = ${safeScriptJson(pricedReport)}; window.__CODEX_USAGE_PERIOD_COMPARISON__ = ${safeScriptJson(periodComparison)};</script>\n<script type="module">\n${inlineTimelineUtils}\n${bundledApp}\n</script>`,
     );
 }
 

@@ -5,11 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
+import { createRepositoryResolver } from "./repository-identity.js";
+import { estimateCostForEvents, estimateEventCost, LONG_CONTEXT_INPUT_THRESHOLD, pricingVersionForTimestamp } from "./pricing.js";
+import { buildTimelineRows } from "../public/timeline-utils.js";
+
 const SESSION_DIRS = ["sessions", "archived_sessions"];
 const PROJECT_USAGE_DIR = ".codex-usage";
 const PROJECT_USAGE_FILE = "usage.jsonl";
 const PROJECT_LOG_SCHEMA_VERSION = "codex-usage.project-log.v1";
-const MS_PER_HOUR = 60 * 60 * 1000;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const USAGE_FIELDS = [
   "total",
@@ -18,6 +21,9 @@ const USAGE_FIELDS = [
   "output",
   "reasoning",
 ];
+export const USAGE_DETAIL_MASK = Object.freeze({ input: 1, cached: 2, output: 4, reasoning: 8, complete: 15, cacheWrite: 32 });
+const USAGE_DETAIL_INCONSISTENT = 16;
+const USAGE_DETAIL_KEYS = ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens"];
 
 export function emptyUsage() {
   return { total: 0, input: 0, cached: 0, output: 0, reasoning: 0 };
@@ -33,6 +39,109 @@ function usageFromRaw(raw = {}) {
   };
 }
 
+function readCacheWrite(raw = {}) {
+  const value = raw.cache_write_input_tokens;
+  const known = Object.hasOwn(raw, "cache_write_input_tokens") && value !== null && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+  return { tokens: known ? Number(value) : 0, known };
+}
+
+function readServiceTier(row = {}, payload = {}) {
+  const values = [
+    row.service_tier,
+    payload.service_tier,
+    payload.info?.service_tier,
+    payload.response?.service_tier,
+    payload.info?.response?.service_tier,
+  ];
+  const value = values.find((candidate) => typeof candidate === "string" && candidate.trim());
+  return value ? value.trim().toLowerCase() : "unknown";
+}
+
+function lastUsageMatchesDelta(last, lastMask, delta, deltaMask) {
+  const required = USAGE_DETAIL_MASK.input | USAGE_DETAIL_MASK.output;
+  if ((lastMask & required) !== required || (deltaMask & required) !== required) return false;
+  for (const [field, bit] of [
+    ["input", USAGE_DETAIL_MASK.input],
+    ["cached", USAGE_DETAIL_MASK.cached],
+    ["output", USAGE_DETAIL_MASK.output],
+    ["reasoning", USAGE_DETAIL_MASK.reasoning],
+  ]) {
+    if ((lastMask & bit) && (!(deltaMask & bit) || last[field] !== delta[field])) return false;
+  }
+  return true;
+}
+
+function cacheWriteForEvent({ cumulative, previous, last, lastMatches }) {
+  if (!cumulative) return last || { tokens: 0, known: false };
+  const hasDelta = cumulative.known && previous.known;
+  const deltaTokens = hasDelta ? Math.max(0, cumulative.tokens - previous.tokens) : 0;
+  if (lastMatches && last?.known) {
+    if (hasDelta && deltaTokens !== last.tokens) return { tokens: 0, known: false };
+    return last;
+  }
+  return hasDelta ? { tokens: deltaTokens, known: true } : { tokens: 0, known: false };
+}
+
+function contextForEvent(matches, usage, mask) {
+  if (!matches || !(mask & USAGE_DETAIL_MASK.input)) return { requestInputTokens: 0, contextLevel: "unknown" };
+  return {
+    requestInputTokens: usage.input,
+    contextLevel: usage.input > LONG_CONTEXT_INPUT_THRESHOLD ? "long" : "short",
+  };
+}
+
+function usageDetailMask(raw = {}, keys = USAGE_DETAIL_KEYS) {
+  return keys.reduce((mask, key, index) => {
+    const value = raw[key];
+    const known = Object.hasOwn(raw, key) && value !== null && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+    return known ? mask | (1 << index) : mask;
+  }, 0);
+}
+
+function projectLogDetailMask(raw = {}) {
+  const has = (...keys) =>
+    keys.some((key) => {
+      const value = raw[key];
+      return Object.hasOwn(raw, key) && value !== null && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0;
+    });
+  return (
+    (has("input", "input_tokens") ? USAGE_DETAIL_MASK.input : 0) |
+    (has("cached", "cached_input_tokens") ? USAGE_DETAIL_MASK.cached : 0) |
+    (has("output", "output_tokens") ? USAGE_DETAIL_MASK.output : 0) |
+    (has("reasoning", "reasoning_output_tokens") ? USAGE_DETAIL_MASK.reasoning : 0)
+  );
+}
+
+function validateUsageDetails(usage, detailMask) {
+  let gap = 0;
+  let mask = detailMask;
+  const inputKnown = Boolean(mask & USAGE_DETAIL_MASK.input);
+  const cachedKnown = Boolean(mask & USAGE_DETAIL_MASK.cached);
+  const outputKnown = Boolean(mask & USAGE_DETAIL_MASK.output);
+  const reasoningKnown = Boolean(mask & USAGE_DETAIL_MASK.reasoning);
+  if (usage.total > 0 && inputKnown && outputKnown && usage.input === 0 && usage.output === 0) {
+    return {
+      detailMask: (mask & ~USAGE_DETAIL_MASK.complete) | USAGE_DETAIL_INCONSISTENT,
+      reconciliationGap: usage.total,
+    };
+  }
+  if (inputKnown && cachedKnown && usage.cached > usage.input) {
+    gap += usage.cached - usage.input;
+    mask &= ~USAGE_DETAIL_MASK.cached;
+  }
+  if (inputKnown && outputKnown && usage.total !== usage.input + usage.output) {
+    gap += Math.abs(usage.total - usage.input - usage.output);
+  }
+  if (outputKnown && reasoningKnown && usage.reasoning > usage.output) {
+    gap += usage.reasoning - usage.output;
+    mask &= ~USAGE_DETAIL_MASK.reasoning;
+  }
+  if (gap > 0) {
+    mask |= USAGE_DETAIL_INCONSISTENT;
+  }
+  return { detailMask: mask, reconciliationGap: gap };
+}
+
 function addUsage(target, usage) {
   for (const field of USAGE_FIELDS) {
     target[field] += usage[field] || 0;
@@ -40,12 +149,22 @@ function addUsage(target, usage) {
   return target;
 }
 
-function diffUsage(current, previous) {
+function diffUsage(current, previous, currentMask = USAGE_DETAIL_MASK.complete, previousMask = USAGE_DETAIL_MASK.complete) {
   const diff = emptyUsage();
-  for (const field of USAGE_FIELDS) {
-    diff[field] = Math.max(0, (current[field] || 0) - (previous[field] || 0));
+  diff.total = Math.max(0, (current.total || 0) - (previous.total || 0));
+  let detailMask = 0;
+  for (const [field, bit] of [
+    ["input", USAGE_DETAIL_MASK.input],
+    ["cached", USAGE_DETAIL_MASK.cached],
+    ["output", USAGE_DETAIL_MASK.output],
+    ["reasoning", USAGE_DETAIL_MASK.reasoning],
+  ]) {
+    if ((currentMask & bit) && (previousMask & bit)) {
+      diff[field] = Math.max(0, (current[field] || 0) - (previous[field] || 0));
+      detailMask |= bit;
+    }
   }
-  return diff;
+  return { usage: diff, detailMask };
 }
 
 function isZeroUsage(usage) {
@@ -324,14 +443,26 @@ function fallbackSessionId(filePath) {
   return base.replace(/^rollout-/, "") || filePath;
 }
 
-function readTokenUsage(payload) {
+function readTokenUsage(payload, row = {}) {
   const info = payload?.info || {};
-  const cumulative = info.total_token_usage ? usageFromRaw(info.total_token_usage) : null;
-  const last = info.last_token_usage ? usageFromRaw(info.last_token_usage) : null;
-  return { cumulative, last };
+  const cumulativeRaw = info.total_token_usage;
+  const lastRaw = info.last_token_usage;
+  const cumulative = cumulativeRaw ? usageFromRaw(cumulativeRaw) : null;
+  const last = lastRaw ? usageFromRaw(lastRaw) : null;
+  return {
+    cumulative,
+    cumulativeMask: cumulativeRaw ? usageDetailMask(cumulativeRaw) : 0,
+    cumulativeCacheWrite: readCacheWrite(cumulativeRaw),
+    last,
+    lastMask: lastRaw ? usageDetailMask(lastRaw) : 0,
+    lastCacheWrite: readCacheWrite(lastRaw),
+    serviceTier: readServiceTier(row, payload),
+  };
 }
 
-export async function parseSessionFile(filePath, home) {
+export async function parseSessionFile(filePath, home, options = {}) {
+  const resolveRepository = options.repositoryResolver || createRepositoryResolver();
+  const threadNames = options.threadNames || new Map();
   const meta = {
     id: fallbackSessionId(filePath),
     source: "",
@@ -344,6 +475,8 @@ export async function parseSessionFile(filePath, home) {
   let firstAt = "";
   let lastAt = "";
   let previousCumulative = emptyUsage();
+  let previousCumulativeMask = USAGE_DETAIL_MASK.complete;
+  let previousCumulativeCacheWrite = { tokens: 0, known: false };
   let finalUsage = emptyUsage();
   let tokenEventCount = 0;
   const events = [];
@@ -374,16 +507,28 @@ export async function parseSessionFile(filePath, home) {
       continue;
     }
 
-    const { cumulative, last } = readTokenUsage(row.payload);
+    const { cumulative, cumulativeMask, cumulativeCacheWrite, last, lastMask, lastCacheWrite, serviceTier } = readTokenUsage(row.payload, row);
     let increment = emptyUsage();
+    let detailMask = 0;
+    let cacheWrite = { tokens: 0, known: false };
+    let lastMatchesDelta = false;
     if (cumulative) {
-      increment = diffUsage(cumulative, previousCumulative);
+      const diff = diffUsage(cumulative, previousCumulative, cumulativeMask, previousCumulativeMask);
+      increment = diff.usage;
+      detailMask = diff.detailMask;
+      lastMatchesDelta = Boolean(last && lastUsageMatchesDelta(last, lastMask, increment, detailMask));
+      cacheWrite = cacheWriteForEvent({ cumulative: cumulativeCacheWrite, previous: previousCumulativeCacheWrite, last: lastCacheWrite, lastMatches: lastMatchesDelta });
       previousCumulative = cumulative;
+      previousCumulativeMask = cumulativeMask;
+      previousCumulativeCacheWrite = cumulativeCacheWrite;
       finalUsage = cumulative;
     } else if (last) {
       increment = last;
+      detailMask = lastMask;
+      cacheWrite = lastCacheWrite;
       addUsage(finalUsage, last);
     }
+    const context = contextForEvent(lastMatchesDelta, increment, detailMask);
 
     if (isZeroUsage(increment)) {
       continue;
@@ -395,6 +540,8 @@ export async function parseSessionFile(filePath, home) {
       source: meta.source,
       homeLabel: home.homeLabel || home.label,
     });
+    const repository = await resolveRepository(meta.cwd);
+    const detailValidation = validateUsageDetails(increment, detailMask);
     events.push({
       id: `${meta.id}:${tokenEventCount}`,
       sessionId: meta.id,
@@ -406,8 +553,20 @@ export async function parseSessionFile(filePath, home) {
       source: meta.source,
       originator: meta.originator,
       cwd: meta.cwd,
+      repositoryKey: repository.key,
+      repositoryPath: repository.path,
+      repositoryKind: repository.kind,
+      conversationName: threadNames.get(meta.id) || "",
       model,
       total: increment,
+      detailMask: detailValidation.detailMask,
+      reconciliationGap: detailValidation.reconciliationGap,
+      cacheWriteTokens: cacheWrite.tokens,
+      cacheWriteKnown: cacheWrite.known,
+      requestInputTokens: context.requestInputTokens,
+      contextLevel: context.contextLevel,
+      serviceTier,
+      priceVersion: pricingVersionForTimestamp(row.timestamp || lastAt || firstAt),
     });
   }
 
@@ -434,6 +593,7 @@ export async function parseSessionFile(filePath, home) {
       source: meta.source,
       originator: meta.originator,
       cwd: meta.cwd,
+      conversationName: threadNames.get(meta.id) || "",
       model,
       cliVersion: meta.cliVersion,
       modelProvider: meta.modelProvider,
@@ -460,6 +620,26 @@ async function* readJsonlRows(filePath) {
       // Ignore malformed JSONL rows from interrupted writes.
     }
   }
+}
+
+export async function readSessionThreadNames(homePath) {
+  const threadNames = new Map();
+  const indexPath = path.join(homePath, "session_index.jsonl");
+  if (!(await exists(indexPath))) {
+    return threadNames;
+  }
+  try {
+    for await (const row of readJsonlRows(indexPath)) {
+      const id = String(row.id || "").trim();
+      const name = String(row.thread_name || "").trim();
+      if (id && name) {
+        threadNames.set(id, name);
+      }
+    }
+  } catch {
+    // Thread names are optional metadata; usage aggregation must still work if the index is unreadable.
+  }
+  return threadNames;
 }
 
 function usageFromProjectLog(raw = {}) {
@@ -499,7 +679,8 @@ function isSupportedProjectLogRow(row) {
   return !row.schema_version || row.schema_version === PROJECT_LOG_SCHEMA_VERSION;
 }
 
-async function parseProjectUsageLogFile(filePath, source) {
+async function parseProjectUsageLogFile(filePath, source, options = {}) {
+  const resolveRepository = options.repositoryResolver || createRepositoryResolver();
   const sessions = new Map();
   const events = [];
   let rowNumber = 0;
@@ -514,7 +695,12 @@ async function parseProjectUsageLogFile(filePath, source) {
     if (!Number.isFinite(time)) {
       continue;
     }
+    const rawUsage = row.usage || row.token_usage || row.total_token_usage || {};
     const usage = projectLogUsage(row);
+    const cacheWrite = readCacheWrite(rawUsage);
+    const detailMask = projectLogDetailMask(rawUsage);
+    const requestLinked = Boolean(row.request_id || row.requestId || row.response_id || row.responseId);
+    const context = contextForEvent(requestLinked, usage, detailMask);
     if (isZeroUsage(usage)) {
       continue;
     }
@@ -523,7 +709,9 @@ async function parseProjectUsageLogFile(filePath, source) {
     const sourceName = projectLogSource(row);
     const channel = projectLogChannel(row);
     const cwd = row.cwd || row.project_root || row.projectRoot || source.path;
+    const repository = await resolveRepository(cwd);
     const model = row.model || "Unknown model";
+    const detailValidation = validateUsageDetails(usage, detailMask);
     const event = {
       id: row.event_id || row.eventId || row.request_id || row.requestId || `${sessionId}:${events.length + 1}`,
       sessionId,
@@ -535,8 +723,19 @@ async function parseProjectUsageLogFile(filePath, source) {
       source: sourceName,
       originator: "",
       cwd,
+      repositoryKey: repository.key,
+      repositoryPath: repository.path,
+      repositoryKind: repository.kind,
       model,
       total: usage,
+      detailMask: detailValidation.detailMask,
+      reconciliationGap: detailValidation.reconciliationGap,
+      cacheWriteTokens: cacheWrite.tokens,
+      cacheWriteKnown: cacheWrite.known,
+      requestInputTokens: context.requestInputTokens,
+      contextLevel: context.contextLevel,
+      serviceTier: readServiceTier(row, rawUsage),
+      priceVersion: pricingVersionForTimestamp(timestamp),
     };
     events.push(event);
 
@@ -595,7 +794,8 @@ function createStringInterner() {
   };
 }
 
-async function streamSessionUsageFileEvents(filePath, home, onEvent) {
+async function streamSessionUsageFileEvents(filePath, home, onEvent, options = {}) {
+  const resolveRepository = options.repositoryResolver || createRepositoryResolver();
   const meta = {
     id: fallbackSessionId(filePath),
     source: "",
@@ -606,6 +806,8 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent) {
   let firstAt = "";
   let lastAt = "";
   let previousCumulative = emptyUsage();
+  let previousCumulativeMask = USAGE_DETAIL_MASK.complete;
+  let previousCumulativeCacheWrite = { tokens: 0, known: false };
 
   for await (const row of readJsonlRows(filePath)) {
     if (row.timestamp) {
@@ -630,14 +832,26 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent) {
       continue;
     }
 
-    const { cumulative, last } = readTokenUsage(row.payload);
+    const { cumulative, cumulativeMask, cumulativeCacheWrite, last, lastMask, lastCacheWrite, serviceTier } = readTokenUsage(row.payload, row);
     let increment = emptyUsage();
+    let detailMask = 0;
+    let cacheWrite = { tokens: 0, known: false };
+    let lastMatchesDelta = false;
     if (cumulative) {
-      increment = diffUsage(cumulative, previousCumulative);
+      const diff = diffUsage(cumulative, previousCumulative, cumulativeMask, previousCumulativeMask);
+      increment = diff.usage;
+      detailMask = diff.detailMask;
+      lastMatchesDelta = Boolean(last && lastUsageMatchesDelta(last, lastMask, increment, detailMask));
+      cacheWrite = cacheWriteForEvent({ cumulative: cumulativeCacheWrite, previous: previousCumulativeCacheWrite, last: lastCacheWrite, lastMatches: lastMatchesDelta });
       previousCumulative = cumulative;
+      previousCumulativeMask = cumulativeMask;
+      previousCumulativeCacheWrite = cumulativeCacheWrite;
     } else if (last) {
       increment = last;
+      detailMask = lastMask;
+      cacheWrite = lastCacheWrite;
     }
+    const context = contextForEvent(lastMatchesDelta, increment, detailMask);
 
     if (isZeroUsage(increment)) {
       continue;
@@ -653,6 +867,8 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent) {
     if (!Number.isFinite(timestampMs)) {
       continue;
     }
+    const repository = await resolveRepository(meta.cwd);
+    const detailValidation = validateUsageDetails(increment, detailMask);
     await onEvent({
       timestampMs,
       sessionId: meta.id,
@@ -660,13 +876,25 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent) {
       homeLabel: home.homeLabel || home.label,
       channel,
       project: meta.cwd,
+      repositoryKey: repository.key,
+      repositoryPath: repository.path,
+      repositoryKind: repository.kind,
       model,
       usage: increment,
+      detailMask: detailValidation.detailMask,
+      reconciliationGap: detailValidation.reconciliationGap,
+      cacheWriteTokens: cacheWrite.tokens,
+      cacheWriteKnown: cacheWrite.known,
+      requestInputTokens: context.requestInputTokens,
+      contextLevel: context.contextLevel,
+      serviceTier,
+      priceVersion: pricingVersionForTimestamp(timestamp),
     });
   }
 }
 
-async function streamProjectUsageFileEvents(filePath, source, onEvent) {
+async function streamProjectUsageFileEvents(filePath, source, onEvent, options = {}) {
+  const resolveRepository = options.repositoryResolver || createRepositoryResolver();
   let rowNumber = 0;
 
   for await (const row of readJsonlRows(filePath)) {
@@ -679,33 +907,52 @@ async function streamProjectUsageFileEvents(filePath, source, onEvent) {
     if (!Number.isFinite(time)) {
       continue;
     }
+    const rawUsage = row.usage || row.token_usage || row.total_token_usage || {};
     const usage = projectLogUsage(row);
+    const cacheWrite = readCacheWrite(rawUsage);
+    const detailMask = projectLogDetailMask(rawUsage);
+    const requestLinked = Boolean(row.request_id || row.requestId || row.response_id || row.responseId);
+    const context = contextForEvent(requestLinked, usage, detailMask);
     if (isZeroUsage(usage)) {
       continue;
     }
 
+    const cwd = row.cwd || row.project_root || row.projectRoot || source.path;
+    const repository = await resolveRepository(cwd);
+    const detailValidation = validateUsageDetails(usage, detailMask);
     await onEvent({
       timestampMs: time,
       sessionId: projectLogSessionId(row, source, rowNumber),
       homeId: source.id,
       homeLabel: source.label,
       channel: projectLogChannel(row),
-      project: row.cwd || row.project_root || row.projectRoot || source.path,
+      project: cwd,
+      repositoryKey: repository.key,
+      repositoryPath: repository.path,
+      repositoryKind: repository.kind,
       model: row.model || "Unknown model",
       usage,
+      detailMask: detailValidation.detailMask,
+      reconciliationGap: detailValidation.reconciliationGap,
+      cacheWriteTokens: cacheWrite.tokens,
+      cacheWriteKnown: cacheWrite.known,
+      requestInputTokens: context.requestInputTokens,
+      contextLevel: context.contextLevel,
+      serviceTier: readServiceTier(row, row),
+      priceVersion: pricingVersionForTimestamp(timestamp),
     });
   }
 }
 
-export async function streamUsageFileEvents(filePath, source, onEvent) {
+export async function streamUsageFileEvents(filePath, source, onEvent, options = {}) {
   if (source.kind === "project-log") {
-    await streamProjectUsageFileEvents(filePath, source, onEvent);
+    await streamProjectUsageFileEvents(filePath, source, onEvent, options);
     return;
   }
-  await streamSessionUsageFileEvents(filePath, source, onEvent);
+  await streamSessionUsageFileEvents(filePath, source, onEvent, options);
 }
 
-async function parseSessionFileForIndex(filePath, home, intern) {
+async function parseSessionFileForIndex(filePath, home, intern, resolveRepository) {
   const events = [];
   await streamSessionUsageFileEvents(filePath, home, (event) => {
     events.push({
@@ -715,18 +962,29 @@ async function parseSessionFileForIndex(filePath, home, intern) {
       l: intern(event.homeLabel),
       c: intern(event.channel),
       p: intern(event.project),
+      rk: intern(event.repositoryKey),
+      rp: intern(event.repositoryPath),
+      rt: intern(event.repositoryKind),
       m: intern(event.model),
       total: event.usage.total,
       input: event.usage.input,
       cached: event.usage.cached,
       output: event.usage.output,
       reasoning: event.usage.reasoning,
+      detailMask: event.detailMask,
+      reconciliationGap: event.reconciliationGap,
+      cacheWriteTokens: event.cacheWriteTokens,
+      cacheWriteKnown: event.cacheWriteKnown,
+      requestInputTokens: event.requestInputTokens,
+      contextLevel: intern(event.contextLevel),
+      serviceTier: intern(event.serviceTier),
+      priceVersion: intern(event.priceVersion),
     });
-  });
+  }, { repositoryResolver: resolveRepository });
   return events;
 }
 
-async function parseProjectUsageLogFileForIndex(filePath, source, intern) {
+async function parseProjectUsageLogFileForIndex(filePath, source, intern, resolveRepository) {
   const events = [];
   await streamProjectUsageFileEvents(filePath, source, (event) => {
     events.push({
@@ -736,19 +994,31 @@ async function parseProjectUsageLogFileForIndex(filePath, source, intern) {
       l: intern(event.homeLabel),
       c: intern(event.channel),
       p: intern(event.project),
+      rk: intern(event.repositoryKey),
+      rp: intern(event.repositoryPath),
+      rt: intern(event.repositoryKind),
       m: intern(event.model),
       total: event.usage.total,
       input: event.usage.input,
       cached: event.usage.cached,
       output: event.usage.output,
       reasoning: event.usage.reasoning,
+      detailMask: event.detailMask,
+      reconciliationGap: event.reconciliationGap,
+      cacheWriteTokens: event.cacheWriteTokens,
+      cacheWriteKnown: event.cacheWriteKnown,
+      requestInputTokens: event.requestInputTokens,
+      contextLevel: intern(event.contextLevel),
+      serviceTier: intern(event.serviceTier),
+      priceVersion: intern(event.priceVersion),
     });
-  });
+  }, { repositoryResolver: resolveRepository });
   return events;
 }
 
 export async function buildUsageReport(options = {}) {
   const homes = options.homes || (await discoverUsageSources(options));
+  const repositoryResolver = createRepositoryResolver();
   const sessions = [];
   const events = [];
   const warnings = [];
@@ -756,7 +1026,7 @@ export async function buildUsageReport(options = {}) {
   for (const home of homes) {
     if (home.kind === "project-log" && home.usageLogPath) {
       try {
-        const parsed = await parseProjectUsageLogFile(home.usageLogPath, home);
+        const parsed = await parseProjectUsageLogFile(home.usageLogPath, home, { repositoryResolver });
         sessions.push(...parsed.sessions);
         events.push(...parsed.events);
       } catch (error) {
@@ -765,6 +1035,7 @@ export async function buildUsageReport(options = {}) {
       continue;
     }
 
+    const threadNames = await readSessionThreadNames(home.path);
     let files = [];
     try {
       files = await discoverSessionFiles(home.path);
@@ -775,7 +1046,7 @@ export async function buildUsageReport(options = {}) {
 
     for (const file of files) {
       try {
-        const parsed = await parseSessionFile(file, home);
+        const parsed = await parseSessionFile(file, home, { repositoryResolver, threadNames });
         if (!parsed) {
           continue;
         }
@@ -801,6 +1072,7 @@ export async function buildUsageReport(options = {}) {
 
 export async function buildUsageIndex(options = {}) {
   const homes = options.homes || (await discoverUsageSources(options));
+  const repositoryResolver = createRepositoryResolver();
   const warnings = [];
   const events = [];
   const interner = createStringInterner();
@@ -808,7 +1080,7 @@ export async function buildUsageIndex(options = {}) {
   for (const home of homes) {
     if (home.kind === "project-log" && home.usageLogPath) {
       try {
-        events.push(...(await parseProjectUsageLogFileForIndex(home.usageLogPath, home, interner.intern)));
+        events.push(...(await parseProjectUsageLogFileForIndex(home.usageLogPath, home, interner.intern, repositoryResolver)));
       } catch (error) {
         warnings.push(`无法解析 ${home.usageLogPath}: ${error.message}`);
       }
@@ -825,7 +1097,7 @@ export async function buildUsageIndex(options = {}) {
 
     for (const file of files) {
       try {
-        events.push(...(await parseSessionFileForIndex(file, home, interner.intern)));
+        events.push(...(await parseSessionFileForIndex(file, home, interner.intern, repositoryResolver)));
       } catch (error) {
         warnings.push(`无法解析 ${file}: ${error.message}`);
       }
@@ -851,27 +1123,8 @@ function localDateKey(date) {
   return `${year}-${month}-${day}`;
 }
 
-function monthKey(date) {
-  return localDateKey(date).slice(0, 7);
-}
-
-function localHourKey(date) {
-  // Hour buckets stay in local time so API summaries match the browser dashboard labels.
-  const hour = String(date.getHours()).padStart(2, "0");
-  return `${localDateKey(date)} ${hour}:00`;
-}
-
-function startOfLocalHour(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours());
-}
-
 function startOfLocalDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function isSingleLocalDayRange(range = {}) {
-  // Single-day hourly summaries should include zero-use hours for a complete 24-hour chart.
-  return Boolean(range.start && range.end && localDateKey(range.start) === localDateKey(range.end));
 }
 
 function endOfLocalDay(date) {
@@ -888,12 +1141,6 @@ function startOfLocalWeek(date) {
 function addLocalDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
-  return next;
-}
-
-function addLocalHours(date, hours) {
-  const next = new Date(date);
-  next.setHours(next.getHours() + hours);
   return next;
 }
 
@@ -1031,19 +1278,6 @@ function resolveDateRangeFromTimestamps(filters = {}, timestamps = []) {
   };
 }
 
-function bucketKey(date, bucket) {
-  if (bucket === "hour") {
-    return localHourKey(date);
-  }
-  if (bucket === "month") {
-    return monthKey(date);
-  }
-  if (bucket === "week") {
-    return localDateKey(startOfLocalWeek(date));
-  }
-  return localDateKey(date);
-}
-
 function groupByUsage(events, keyFn, options = {}) {
   const groups = new Map();
   for (const event of events) {
@@ -1097,6 +1331,43 @@ function groupByUsage(events, keyFn, options = {}) {
         : {}),
     }))
     .sort((a, b) => b.total.total - a.total.total);
+}
+
+function groupRepositories(events) {
+  const groups = new Map();
+  for (const event of events) {
+    const key = event.repositoryKey || `directory:${event.cwd || "Unknown cwd"}`;
+    const group = groups.get(key) || {
+      key,
+      name: event.repositoryPath || event.cwd || "Unknown cwd",
+      count: 0,
+      sessions: new Set(),
+      pathCount: 0,
+      pathSet: new Set(),
+      kind: event.repositoryKind || "directory",
+      total: emptyUsage(),
+    };
+    const repositoryPath = event.repositoryPath || event.cwd || "Unknown cwd";
+    if (repositoryPath < group.name) group.name = repositoryPath;
+    group.count += 1;
+    group.sessions.add(event.sessionId);
+    if (event.cwd) {
+      group.pathSet.add(event.cwd);
+    }
+    addUsage(group.total, event.total);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map((group) => {
+      const { sessions, pathSet, ...row } = group;
+      return {
+        ...row,
+        sessions: sessions.size,
+        sessionIds: [...sessions],
+        pathCount: pathSet.size,
+      };
+    })
+    .sort((a, b) => b.total.total - a.total.total || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 function indexDateRange(filters = {}, events = []) {
@@ -1168,32 +1439,42 @@ function groupIndexedEvents(index, events, keyFn, options = {}) {
     .sort((a, b) => b.total.total - a.total.total);
 }
 
-function emptyTimelineRow(key) {
-  // Empty timeline rows preserve the same response shape as grouped hourly rows.
-  return {
-    key,
-    name: key,
-    count: 0,
-    sessions: 0,
-    total: emptyUsage(),
-    channels: [],
-  };
-}
-
-export function completeHourlyTimeline(rows, range, bucket) {
-  // 最近范围按选定边界补齐小时；普通单日范围保留完整自然日补齐。
-  if (bucket !== "hour" || (!isSingleLocalDayRange(range) && range?.preset !== "recent")) {
-    return rows;
+function groupIndexedRepositories(index, events) {
+  const groups = new Map();
+  for (const event of events) {
+    const strings = index.strings;
+    const key = strings[event.rk] || `directory:${strings[event.p] || "Unknown cwd"}`;
+    const group = groups.get(key) || {
+      key,
+      name: strings[event.rp] || strings[event.p] || "Unknown cwd",
+      kind: strings[event.rt] || "directory",
+      count: 0,
+      sessions: new Set(),
+      pathSet: new Set(),
+      total: emptyUsage(),
+    };
+    const repositoryPath = strings[event.rp] || strings[event.p] || "Unknown cwd";
+    if (repositoryPath < group.name) group.name = repositoryPath;
+    group.count += 1;
+    group.sessions.add(event.s);
+    const cwd = strings[event.p];
+    if (cwd) {
+      group.pathSet.add(cwd);
+    }
+    addIndexedUsage(group.total, event);
+    groups.set(key, group);
   }
-  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
-  const start = range?.preset === "recent" ? startOfLocalHour(range.start) : startOfLocalDay(range.start);
-  const end = range?.preset === "recent" ? startOfLocalHour(range.end) : addLocalHours(start, 23);
-  const hourCount = Math.max(0, Math.round((end.getTime() - start.getTime()) / MS_PER_HOUR) + 1);
-  return Array.from({ length: hourCount }, (_, hour) => {
-    const bucketStart = addLocalHours(start, hour);
-    const key = localHourKey(bucketStart);
-    return rowsByKey.get(key) || emptyTimelineRow(key);
-  });
+  return [...groups.values()]
+    .map((group) => {
+      const { sessions, pathSet, ...row } = group;
+      return {
+        ...row,
+        sessions: sessions.size,
+        sessionIds: [...sessions].map((sessionId) => index.strings[sessionId] || String(sessionId)),
+        pathCount: pathSet.size,
+      };
+    })
+    .sort((a, b) => b.total.total - a.total.total || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
 export function usageIndexMetadata(index) {
@@ -1380,6 +1661,152 @@ export function usageComparisonFromAggregates({
   };
 }
 
+export const COMPARISON_PERIOD_KEYS = ["today", "week", "month", "all"];
+
+function emptyPeriodMetrics() {
+  return {
+    total: 0,
+    input: 0,
+    inputUnavailableTokens: 0,
+    cached: 0,
+    cachedUnavailableTokens: 0,
+    uncachedInput: 0,
+    uncachedInputUnavailableTokens: 0,
+    cacheRateInput: 0,
+    cacheRateCached: 0,
+    output: 0,
+    outputUnavailableTokens: 0,
+    reasoning: 0,
+    reasoningUnavailableTokens: 0,
+    unattributedDetailTokens: 0,
+    inconsistentTokens: 0,
+    reconciliationGap: 0,
+  };
+}
+
+function addPeriodEvent(target, event) {
+  const usage = event.total || emptyUsage();
+  const total = Number(usage.total || 0);
+  const mask = Number.isInteger(event.detailMask) ? event.detailMask : USAGE_DETAIL_MASK.complete;
+  target.total += total;
+  if (mask & USAGE_DETAIL_MASK.input) {
+    target.input += Number(usage.input || 0);
+  } else {
+    target.inputUnavailableTokens += total;
+  }
+  if (mask & USAGE_DETAIL_MASK.cached) {
+    target.cached += Number(usage.cached || 0);
+  } else {
+    target.cachedUnavailableTokens += total;
+  }
+  if ((mask & (USAGE_DETAIL_MASK.input | USAGE_DETAIL_MASK.cached)) === (USAGE_DETAIL_MASK.input | USAGE_DETAIL_MASK.cached)) {
+    target.uncachedInput += Math.max(0, Number(usage.input || 0) - Number(usage.cached || 0));
+    target.cacheRateInput += Number(usage.input || 0);
+    target.cacheRateCached += Number(usage.cached || 0);
+  } else {
+    target.uncachedInputUnavailableTokens += total;
+  }
+  if (mask & USAGE_DETAIL_MASK.output) {
+    target.output += Number(usage.output || 0);
+  } else {
+    target.outputUnavailableTokens += total;
+  }
+  if (mask & USAGE_DETAIL_MASK.reasoning) {
+    target.reasoning += Number(usage.reasoning || 0);
+  } else {
+    target.reasoningUnavailableTokens += total;
+  }
+  if ((mask & USAGE_DETAIL_MASK.complete) !== USAGE_DETAIL_MASK.complete) {
+    target.unattributedDetailTokens += total;
+  }
+  if (mask & USAGE_DETAIL_INCONSISTENT) {
+    target.inconsistentTokens += total;
+  }
+  target.reconciliationGap += Number(event.reconciliationGap || 0);
+}
+
+function comparisonRow(map, key, name, event, periodKeys, { includeRepositoryMetadata = false } = {}) {
+  let row = map.get(key);
+  if (!row) {
+    row = {
+      key,
+      name,
+      ...(includeRepositoryMetadata
+        ? { kind: event.repositoryKind || "directory", pathSet: new Set() }
+        : {}),
+      periods: Object.fromEntries(periodKeys.map((period) => [period, emptyPeriodMetrics()])),
+    };
+    map.set(key, row);
+  } else if (includeRepositoryMetadata && name < row.name) {
+    row.name = name;
+  }
+  if (includeRepositoryMetadata && event.cwd) {
+    row.pathSet.add(event.cwd);
+  }
+
+  return row;
+}
+
+export function summarizePeriodComparison(events = [], options = {}) {
+  const asOf = options.now ? new Date(options.now) : new Date();
+  const timestamps = events
+    .map((event) => ({ timestamp: event.timestamp }))
+    .filter((event) => Number.isFinite(Date.parse(event.timestamp)));
+  const ranges = Object.fromEntries(
+    COMPARISON_PERIOD_KEYS.map((key) => [key, resolveDateRange({ preset: key, now: asOf }, timestamps)]),
+  );
+  const rows = { models: new Map(), repositories: new Map() };
+  const totals = Object.fromEntries(COMPARISON_PERIOD_KEYS.map((key) => [key, emptyPeriodMetrics()]));
+
+  for (const event of events) {
+    const timestamp = Date.parse(event.timestamp);
+    if (!Number.isFinite(timestamp)) {
+      continue;
+    }
+    const modelKey = event.model || "Unknown model";
+    const repositoryKey = event.repositoryKey || `directory:${event.cwd || "Unknown cwd"}`;
+    const modelRow = comparisonRow(rows.models, modelKey, modelKey, event, COMPARISON_PERIOD_KEYS);
+    const repositoryRowKey = repositoryKey;
+    const repositoryName = event.repositoryPath || event.cwd || "Unknown cwd";
+    const repositoryRow = comparisonRow(rows.repositories, repositoryRowKey, repositoryName, event, COMPARISON_PERIOD_KEYS, {
+      includeRepositoryMetadata: true,
+    });
+
+    for (const period of COMPARISON_PERIOD_KEYS) {
+      const range = ranges[period];
+      if ((range.start && timestamp < range.start.getTime()) || (range.end && timestamp > range.end.getTime())) {
+        continue;
+      }
+      addPeriodEvent(totals[period], event);
+      addPeriodEvent(modelRow.periods[period], event);
+      addPeriodEvent(repositoryRow.periods[period], event);
+    }
+  }
+
+  function sortedRows(map) {
+    return [...map.values()]
+      .map((row) => {
+        const { pathSet, ...result } = row;
+        return pathSet
+          ? { ...result, pathCount: pathSet.size }
+          : result;
+      })
+      .sort((a, b) => b.periods.all.total - a.periods.all.total || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+
+  return {
+    asOf: asOf.toISOString(),
+    periods: COMPARISON_PERIOD_KEYS.map((key) => ({
+      key,
+      start: ranges[key].start?.toISOString() || null,
+      end: ranges[key].end?.toISOString() || null,
+    })),
+    totals,
+    models: sortedRows(rows.models),
+    repositories: sortedRows(rows.repositories),
+  };
+}
+
 export function summarizeUsageIndex(index, filters = {}) {
   const bucket = filters.bucket || "day";
   const strings = index.strings;
@@ -1409,13 +1836,21 @@ export function summarizeUsageIndex(index, filters = {}) {
     currentTotals: totals,
     now,
   });
-  const timeline = completeHourlyTimeline(
-    groupIndexedEvents(index, events, (event) => bucketKey(new Date(event.t), bucket), { includeChannels: true }).sort((a, b) =>
-      a.key.localeCompare(b.key),
-    ),
-    range,
-    bucket,
-  );
+  const timelineEvents = events.map((event) => ({
+    timestamp: event.t,
+    sessionId: strings[event.s] || String(event.s),
+    channel: strings[event.c] || "Unknown",
+    model: strings[event.m] || "Unknown model",
+    total: { total: event.total, input: event.input, cached: event.cached, output: event.output, reasoning: event.reasoning },
+    detailMask: event.detailMask,
+    cacheWriteTokens: event.cacheWriteTokens,
+    cacheWriteKnown: Boolean(event.cacheWriteKnown),
+    contextLevel: strings[event.contextLevel] || event.contextLevel,
+    requestInputTokens: event.requestInputTokens,
+    serviceTier: strings[event.serviceTier] || event.serviceTier,
+    priceVersion: strings[event.priceVersion] || event.priceVersion,
+  }));
+  const timeline = buildTimelineRows(timelineEvents, range, bucket, { estimateCost: estimateEventCost });
 
   return {
     generatedAt: index.generatedAt,
@@ -1428,6 +1863,22 @@ export function summarizeUsageIndex(index, filters = {}) {
     },
     totals,
     comparison,
+    costEstimate: estimateCostForEvents(events.map((event) => ({
+      model: strings[event.m] || "Unknown model",
+      detailMask: event.detailMask,
+      cacheWriteTokens: event.cacheWriteTokens,
+      cacheWriteKnown: event.cacheWriteKnown,
+      requestInputTokens: event.requestInputTokens,
+      contextLevel: strings[event.contextLevel] || event.contextLevel,
+      serviceTier: strings[event.serviceTier] || event.serviceTier,
+      priceVersion: strings[event.priceVersion] || event.priceVersion,
+      total: {
+        total: event.total,
+        input: event.input,
+        cached: event.cached,
+        output: event.output,
+      },
+    }))),
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.h)).size,
@@ -1436,6 +1887,7 @@ export function summarizeUsageIndex(index, filters = {}) {
     homes: groupIndexedEvents(index, events, (event) => strings[event.l]),
     models: groupIndexedEvents(index, events, (event) => strings[event.m] || "Unknown model"),
     projects: groupIndexedEvents(index, events, (event) => strings[event.p] || "Unknown cwd"),
+    repositories: groupIndexedRepositories(index, events),
   };
 }
 
@@ -1468,13 +1920,7 @@ export function summarizeUsage(report, filters = {}) {
     currentTotals: totals,
     now,
   });
-  const timeline = completeHourlyTimeline(
-    groupByUsage(events, (event) => bucketKey(new Date(event.timestamp), bucket), { includeChannels: true }).sort((a, b) =>
-      a.key.localeCompare(b.key),
-    ),
-    range,
-    bucket,
-  );
+  const timeline = buildTimelineRows(events, range, bucket, { estimateCost: estimateEventCost });
 
   return {
     generatedAt: report.generatedAt,
@@ -1487,6 +1933,7 @@ export function summarizeUsage(report, filters = {}) {
     },
     totals,
     comparison,
+    costEstimate: estimateCostForEvents(events),
     eventCount: events.length,
     sessionCount: sessionIds.size,
     homeCount: new Set(events.map((event) => event.homeId)).size,
@@ -1495,5 +1942,6 @@ export function summarizeUsage(report, filters = {}) {
     homes: groupByUsage(events, (event) => event.homeLabel),
     models: groupByUsage(events, (event) => event.model || "Unknown model"),
     projects: groupByUsage(events, (event) => event.cwd || "Unknown cwd"),
+    repositories: groupRepositories(events),
   };
 }

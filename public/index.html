@@ -22,16 +22,11 @@
       <header class="topbar">
         <div>
           <h1>Codex Usage</h1>
-          <p id="subtitle">正在扫描本机 Codex 用量...</p>
-          <p id="autoRefreshStatus">自动刷新准备中...</p>
+          <p id="autoRefreshStatus" class="auto-refresh-status" aria-live="polite"><span class="auto-refresh-label">自动刷新</span><button id="autoRefreshToggle" type="button" aria-pressed="true">开</button><span id="autoRefreshInterval">每 60 秒</span><span id="lastSuccessfulCheck">上次成功检查：尚无</span><span id="autoRefreshError" class="auto-refresh-error"></span></p>
         </div>
         <div class="topbar-actions">
-          <div class="theme-toggle" id="themeToggle" role="group" aria-label="主题">
-            <button type="button" data-theme-option="light">浅色</button>
-            <button type="button" data-theme-option="dark">深色</button>
-          </div>
+          <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换主题" aria-pressed="false">浅色/深色</button>
           <button id="importButton" type="button">导入目录</button>
-          <button id="refreshButton" type="button">强制重扫</button>
         </div>
       </header>
 
@@ -39,10 +34,10 @@
         <div class="control-group">
           <span>范围</span>
           <div class="segmented" id="presetButtons">
-            <button type="button" data-preset="today">今日</button>
+            <button type="button" data-preset="today" class="active">今日</button>
             <button type="button" data-preset="week">本周</button>
             <button type="button" data-preset="month">本月</button>
-            <button type="button" data-preset="all" class="active">全部</button>
+            <button type="button" data-preset="all">全部</button>
             <div class="recent-segment" data-preset="recent">
               <span class="recent-segment-label">最近</span>
               <span class="recent-combobox">
@@ -117,8 +112,8 @@
             粒度
             <select id="bucketSelect">
               <!-- 小时粒度用于今日视图展示日内用量变化。 -->
-              <option value="hour">按小时</option>
-              <option value="day" selected>按天</option>
+              <option value="hour" selected>按小时</option>
+              <option value="day">按天</option>
               <option value="week">按周</option>
               <option value="month">按月</option>
             </select>
@@ -132,11 +127,11 @@
           <strong id="totalTokens">-</strong>
         </article>
         <article class="metric">
-          <span>输入</span>
+          <span>总输入</span>
           <strong id="inputTokens">-</strong>
         </article>
         <article class="metric">
-          <span>缓存输入</span>
+          <span>缓存读取</span>
           <strong id="cachedTokens">-</strong>
         </article>
         <article class="metric">
@@ -153,19 +148,54 @@
         </article>
       </section>
 
+      <section class="metrics price-metrics" aria-label="API 费用估算">
+        <article class="metric">
+          <span>总花销</span>
+          <strong id="totalCost">—</strong>
+        </article>
+        <article class="metric">
+          <span>普通输入</span>
+          <strong id="inputCost">—</strong>
+        </article>
+        <article class="metric">
+          <span>缓存读取</span>
+          <strong id="cachedInputCost">—</strong>
+        </article>
+        <article class="metric">
+          <span>输出</span>
+          <strong id="outputCost">—</strong>
+        </article>
+        <article class="metric">
+          <span>命中率</span>
+          <strong id="cacheHitRate">—</strong>
+        </article>
+        <article class="metric">
+          <span>模型数量</span>
+          <strong id="priceModelCount">—</strong>
+        </article>
+      </section>
+      <p id="costEstimateNote" class="cost-estimate-note" aria-live="polite"></p>
+
       <section id="comparisonSummary" class="comparison-strip" aria-label="趋势变化"></section>
 
       <section class="main-grid">
         <section class="panel chart-panel">
-          <div class="panel-heading">
-            <h2>时间分布</h2>
-            <span id="rangeLabel"></span>
+          <div class="panel-heading timeline-heading">
+            <div class="timeline-title">
+              <h2>时间分布</h2>
+              <span id="rangeLabel"></span>
+            </div>
+            <div class="segmented timeline-mode-select" id="timelineModes" role="group" aria-label="时间分布方式">
+              <button type="button" data-timeline-mode="channel" aria-pressed="true">按渠道</button>
+              <button type="button" data-timeline-mode="model" aria-pressed="false">按模型</button>
+              <button type="button" data-timeline-mode="cost" aria-pressed="false">按花销</button>
+            </div>
           </div>
-          <canvas id="timelineChart" width="960" height="320"></canvas>
-          <div id="timelineDetails" class="timeline-details" aria-label="时间分布明细"></div>
+          <canvas id="timelineChart" width="960" height="320" tabindex="0" role="img" aria-label="时间分布柱状图；聚焦后可查看用量详情"></canvas>
+          <div id="timelineLegend" class="timeline-legend" aria-label="图表图例"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel channel-panel">
           <div class="panel-heading">
             <h2>渠道分布</h2>
           </div>
@@ -173,26 +203,28 @@
         </section>
       </section>
 
-      <section class="wide-grid">
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>项目目录</h2>
-            <div class="list-tools">
-              <input id="projectSearch" type="search" autocomplete="off" placeholder="搜索项目" aria-label="搜索项目目录" />
-              <button id="projectToggle" class="panel-action" type="button" aria-expanded="false" hidden>展开</button>
+      <section class="period-comparison-grid" aria-label="跨时间范围用量对比">
+        <section class="panel period-comparison-panel">
+          <div class="panel-heading period-comparison-heading">
+            <div>
+              <h2>按模型</h2>
+
+              <p class="comparison-as-of" data-comparison-as-of></p>
             </div>
+            <input id="modelComparisonSearch" type="search" autocomplete="off" placeholder="搜索模型" aria-label="搜索模型用量对比" />
           </div>
-          <div id="projectList" class="compact-list"></div>
+          <div id="modelComparisonTable" class="period-comparison-table" aria-live="polite"></div>
         </section>
-        <section class="panel">
-          <div class="panel-heading">
-            <h2>模型分布</h2>
-            <div class="list-tools">
-              <input id="modelSearch" type="search" autocomplete="off" placeholder="搜索模型" aria-label="搜索模型" />
-              <button id="modelToggle" class="panel-action" type="button" aria-expanded="false" hidden>展开</button>
+        <section class="panel period-comparison-panel">
+          <div class="panel-heading period-comparison-heading">
+            <div>
+              <h2>按仓库</h2>
+
+              <p class="comparison-as-of" data-comparison-as-of></p>
             </div>
+            <input id="repositoryComparisonSearch" type="search" autocomplete="off" placeholder="搜索仓库" aria-label="搜索仓库用量对比" />
           </div>
-          <div id="modelList" class="compact-list"></div>
+          <div id="repositoryComparisonTable" class="period-comparison-table" aria-live="polite"></div>
         </section>
       </section>
 

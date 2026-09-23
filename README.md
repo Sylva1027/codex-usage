@@ -12,7 +12,7 @@ Codex Usage 是一个本地优先的 Codex token 用量分析工具。它会读�
 - 支持总 token、输入、缓存输入、输出、推理输出和会话数统计
 - 支持今日、本周、本月、全部和自定义时间范围
 - 支持按小时、按天、按周、按月查看时间趋势
-- 支持渠道分布、项目目录 Top 25、模型分布和扫描目录列表
+- 支持渠道分布、Git 仓库与模型用量对比、扫描目录列表
 - 支持 CLI 摘要、交互式网页仪表盘、后台 gateway 和静态 HTML 快照
 - 支持从网页导入额外 Codex home，或导入目标项目生成的 `.codex-usage/usage.jsonl`
 - 服务端使用 fingerprint 做轻量变更检测，只有日志变化时才重新解析
@@ -140,14 +140,20 @@ node src/cli.js summary --json
 - 按小时、按天、按周、按月聚合
 - 总 token、输入、缓存输入、输出、推理输出、会话数
 - 渠道分布
-- 时间分布图
-- 项目目录 Top 25
+- 时间分布图可按渠道、模型或 API 等价费用估算查看，周/月视图按本地日历补齐空槽
+- 服务模式支持可关闭的自动刷新，偏好保存在浏览器本地
+- 仓库分布
 - 模型分布
+- 按模型和仓库并排比较今日、本周、本月和全部用量；点击数字可查看输入、缓存、输出等明细
 - 扫描目录列表
 - 浅色/深色主题切换，选择会保存在浏览器本地
 - 从右上角或“扫描目录”面板导入目录
 
-服务模式下，页面会每 `60` 秒做一次轻量检查。轻量检查只读取 session 文件的 `path + size + mtimeMs` 生成 fingerprint；只有检测到文件变化或点击“强制重扫”时，才重新解析完整日志。
+四个比较范围彼此重叠，不能相加。仓库按 Git 根目录归组；无法识别 Git 仓库时按规范化工作目录归组。输入总量包含普通输入、缓存读取与缓存写入；缓存命中率按“缓存读取 ÷ 总输入”计算，推理输出包含在输出中。费用估算分别计价这三类输入 tokens。明细仅在源日志提供时显示。历史记录若只提供总 token，会保留总量并标记明细未提供；`Unknown model` 不会根据线程或记忆自动改名。静态 HTML 中的比较数据以生成快照时刻为准。
+
+服务模式下，页面默认每 `60` 秒做一次轻量检查，可在标题区关闭或重新开启；偏好保存在浏览器本地。轻量检查只读取 session 文件的 `path + size + mtimeMs` 生成 fingerprint；检测到变化后自动重新解析受影响的日志。静态 HTML 快照不会轮询。
+
+费用图与价格卡片按请求使用 OpenAI API 公布单价计算 API 等价估算，不代表实际账单。普通输入、缓存读取和缓存写入分别计价；缓存写入明细缺失时，相应输入费用不计入。只有能可靠对应单次请求时才应用长上下文费率；服务等级缺失时按 Standard 情景估算并注明未知。未知模型或用量明细不完整的 tokens 会标为未计价，费用图只画可计价部分。费用只按日志中可用的 token 明细估算，不包含工具调用等非 token 费用。历史结果使用索引中记录的价格版本，更新价格表后需重建索引。
 
 ## 导入目录和项目用量日志
 
@@ -193,7 +199,7 @@ dist/codex-usage.html
 ```text
 GET /api/status?since=<fingerprint>
 GET /api/usage
-GET /api/usage?force=1
+
 GET /api/usage?detail=full
 GET /api/summary
 GET /api/imports
@@ -204,10 +210,10 @@ DELETE /api/imports?path=<absolute-path>
 说明：
 
 - `/api/status` 用于轻量检测是否有新日志
-- `/api/usage` 默认返回轻量 `summary` 和 `metadata`
-- `/api/usage?force=1` 强制重扫
-- `/api/usage?detail=full` 返回完整 `report`，用于调试明细
-- `/api/summary` 只返回 summary 包装结果
+- `/api/usage` 默认返回轻量 `summary`、`metadata` 和 `periodComparison`（按模型/仓库的今日、本周、本月、全部汇总）
+
+- `/api/usage?detail=full` 返回完整 `report` 和同口径的 `periodComparison`，用于调试明细
+- `/api/summary` 返回 summary 与 `periodComparison`
 - `/api/imports` 用于查看、添加或删除网页导入的目录
 
 默认低内存 `gateway` 可能会拒绝 `detail=full`，以避免完整明细 report 占用过高。需要调试完整明细时，可以临时提高内存：

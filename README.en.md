@@ -12,7 +12,7 @@ It helps you answer questions like: How many tokens did I use today? Which proje
 - Tracks total tokens, input, cached input, output, reasoning output, and session count
 - Supports today, this week, this month, all time, and custom date ranges
 - Shows time trends by hour, day, week, or month
-- Breaks usage down by channel, project directory, model, and scanned home
+- Breaks usage down by channel, Git repository, model, and scanned home
 - Provides CLI summaries, an interactive local dashboard, a background gateway, and static HTML snapshots
 - Imports extra Codex homes or project logs generated at `.codex-usage/usage.jsonl`
 - Uses a lightweight fingerprint check and only reparses logs when session files change
@@ -139,14 +139,20 @@ The web dashboard supports:
 - Hourly, daily, weekly, and monthly aggregation
 - Total tokens, input, cached input, output, reasoning output, and session count
 - Channel breakdown
-- Timeline chart
-- Top 25 project directories
+- Timeline chart with channel, model, or estimated API-equivalent cost views and local-calendar slots
+- Optional auto-refresh in service mode, with the preference saved locally
+- Repository breakdown
 - Model breakdown
+- Side-by-side model and repository totals for today, this week, this month, and all time, with expandable token details
 - Scanned home list
 - Light and dark themes saved in local browser storage
 - Directory imports from the top-right button or the scanned home panel
 
-In service mode, the page performs a lightweight check every `60` seconds. The check reads only session file `path + size + mtimeMs` values to build a fingerprint. Full logs are reparsed only when files change or when you click the force rescan button.
+The four comparison periods overlap and must not be added together. Events are grouped by Git root; if no Git root can be found, the normalized working directory is used. Input totals include ordinary input, cached reads, and cache writes; cache hit rate is `cached input ÷ total input`, and reasoning output is included in output. Cost estimates price the three input categories separately. Details are shown only when the source log provides them. Historical events that contain only a total keep that total and are marked as missing a breakdown. `Unknown model` entries are not renamed based on thread metadata or recollection. Static HTML comparisons are anchored to the snapshot generation time.
+
+In service mode, the page performs a lightweight check every `60` seconds by default. You can turn it off or back on in the header; the preference is saved locally. The check reads only session file `path + size + mtimeMs` values to build a fingerprint. Changed log files are reparsed automatically. Static HTML snapshots do not poll.
+
+The cost chart and price cards show API-equivalent estimates using published OpenAI API rates; they are not actual bills. Ordinary input, cached reads, and cache writes are priced separately. If cache-write detail is missing, the corresponding input cost is excluded. Long-context rates apply only when a request can be reliably matched to per-request usage. If service tier is missing, the estimate uses a clearly marked Standard scenario. Tokens with unknown models or incomplete usage detail are marked unpriced, and the cost chart shows only priced amounts. The estimate uses available token detail and excludes tool calls and other non-token charges. Historical results retain the price version recorded in the index; rebuild the index after updating the rate table.
 
 ## Directory Imports and Project Logs
 
@@ -192,7 +198,7 @@ After starting the service, these endpoints are available:
 ```text
 GET /api/status?since=<fingerprint>
 GET /api/usage
-GET /api/usage?force=1
+
 GET /api/usage?detail=full
 GET /api/summary
 GET /api/imports
@@ -203,10 +209,10 @@ DELETE /api/imports?path=<absolute-path>
 Endpoint notes:
 
 - `/api/status` checks whether new logs are available
-- `/api/usage` returns lightweight `summary` and `metadata` by default
-- `/api/usage?force=1` forces a full rescan
-- `/api/usage?detail=full` returns the full `report` for debugging
-- `/api/summary` returns only the summary wrapper
+- `/api/usage` returns lightweight `summary`, `metadata`, and `periodComparison` (model/repository totals for today, this week, this month, and all time)
+
+- `/api/usage?detail=full` returns the full `report` and a matching `periodComparison` for debugging
+- `/api/summary` returns the summary and `periodComparison`
 - `/api/imports` lists, adds, or removes directories imported from the dashboard
 
 The default low-memory `gateway` may reject `detail=full` to avoid excessive memory usage. For full detail debugging, restart with a larger memory limit:

@@ -13,6 +13,7 @@ import {
   discoverUsageSources,
   parseSessionFile,
   streamUsageFileEvents,
+  summarizePeriodComparison,
   summarizeUsage,
   summarizeUsageIndex,
   usageIndexMetadata,
@@ -137,6 +138,36 @@ test("streamUsageFileEvents 逐条输出标准化会话事件", async () => {
       },
     ],
   );
+});
+
+test("period comparison groups non-Git usage by working directory", async () => {
+  const homePath = await mkdtemp(path.join(tmpdir(), "codex-usage-thread-names-"));
+  const sessionsPath = path.join(homePath, "sessions");
+  await mkdir(sessionsPath, { recursive: true });
+  await writeFile(
+    path.join(homePath, "session_index.jsonl"),
+    jsonl([{ id: "conversation-1", thread_name: "更新个人主页" }]),
+  );
+  await writeFile(
+    path.join(sessionsPath, "rollout-conversation-1.jsonl"),
+    jsonl([
+      {
+        timestamp: "2026-07-12T01:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "conversation-1", source: "cli", originator: "codex-tui", cwd: "/work/notes" },
+      },
+      tokenRow("2026-07-12T01:01:00.000Z", 100, 80, 10, 20),
+    ]),
+  );
+
+  const home = { id: "main", label: "Main Codex", path: homePath, kind: "main" };
+  const report = await buildUsageReport({ homes: [home] });
+  const comparison = summarizePeriodComparison(report.events, { now: "2026-07-12T12:00:00.000Z" });
+
+  assert.equal(report.events[0].conversationName, "更新个人主页");
+  assert.equal(comparison.repositories[0].name, "/work/notes");
+  assert.equal(comparison.repositories[0].key, "directory:/work/notes");
+  assert.equal(comparison.repositories.length, 1);
 });
 
 test("summarizeUsageIndex 支持大规模索引的全部日期范围", () => {
@@ -665,8 +696,9 @@ test("buildUsageReport and summarizeUsage aggregate totals by channel and period
   );
   assert.equal(custom.totals.total, 300);
   assert.equal(indexedCustom.totals.total, custom.totals.total);
-  assert.equal(custom.timeline[0].key, "2026-05-08");
-  assert.equal(indexedCustom.timeline[0].key, "2026-05-08");
+  assert.equal(custom.timeline[0].key, "2026-05-07");
+  assert.equal(indexedCustom.timeline[0].key, "2026-05-07");
+  assert.deepEqual(indexedAll.timeline, all.timeline);
 });
 
 test("summarizeUsage and summarizeUsageIndex fill a single local day with 24 hourly rows", () => {
@@ -695,4 +727,64 @@ test("summarizeUsage and summarizeUsageIndex fill a single local day with 24 hou
   );
   assert.equal(summary.timeline.length, 24);
   assert.deepEqual(indexedSummary.timeline, summary.timeline);
+});
+
+test("parseSessionFile correlates last-token usage to request context and preserves billing metadata", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "codex-request-pricing-"));
+  const file = path.join(root, "rollout.jsonl");
+  await writeFile(file, jsonl([
+    {
+      timestamp: "2026-07-20T10:00:00.000Z",
+      type: "session_meta",
+      payload: { id: "request-pricing", source: "cli", originator: "codex-tui", cwd: root },
+    },
+    { type: "turn_context", payload: { model: "gpt-6-sol", model_context_window: 1_050_000 } },
+    {
+      timestamp: "2026-07-20T10:01:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            total_tokens: 272_000, input_tokens: 272_000, cached_input_tokens: 0,
+            cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0,
+          },
+          last_token_usage: {
+            total_tokens: 272_000, input_tokens: 272_000, cached_input_tokens: 0,
+            cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0,
+          },
+          response: { service_tier: "priority" },
+        },
+      },
+    },
+    {
+      timestamp: "2026-07-20T10:02:00.000Z",
+      type: "event_msg",
+      payload: {
+        type: "token_count",
+        info: {
+          total_token_usage: {
+            total_tokens: 544_101, input_tokens: 544_001, cached_input_tokens: 0,
+            cache_write_input_tokens: 0, output_tokens: 100, reasoning_output_tokens: 0,
+          },
+          last_token_usage: {
+            total_tokens: 272_101, input_tokens: 272_001, cached_input_tokens: 0,
+            cache_write_input_tokens: 0, output_tokens: 100, reasoning_output_tokens: 0,
+          },
+          response: { service_tier: "default" },
+        },
+      },
+    },
+  ]));
+  const session = await parseSessionFile(file, { id: "home", label: "Test", path: root });
+  assert.equal(session.events.length, 2);
+  assert.equal(session.events[0].requestInputTokens, 272_000);
+  assert.equal(session.events[0].contextLevel, "short");
+  assert.equal(session.events[1].requestInputTokens, 272_001);
+  assert.equal(session.events[1].contextLevel, "long");
+  assert.equal(session.events[0].cacheWriteKnown, true);
+  assert.equal(session.events[0].cacheWriteTokens, 0);
+  assert.equal(session.events[1].cacheWriteKnown, true);
+  assert.equal(session.events[1].serviceTier, "default");
+  assert.equal(session.events[0].serviceTier, "priority");
 });

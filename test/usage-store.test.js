@@ -3,6 +3,7 @@ import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 import { UsageStore } from "../src/usage-store.js";
 import { buildUsageIndex, summarizeUsageIndex } from "../src/usage-core.js";
@@ -43,6 +44,7 @@ async function makeStoreFixture() {
         type: "session_meta",
         payload: { id: "store-session", source: "cli", originator: "codex-tui", cwd: "/work/store" },
       },
+      { type: "turn_context", payload: { model: "gpt-6-sol" } },
       tokenRow("2026-07-12T01:01:00.000Z", 123, 100, 20, 23, 5),
     ]),
   );
@@ -66,6 +68,8 @@ test("UsageStore 首次同步并只重建变化文件", async () => {
     assert.equal(firstMetadata.eventCount, 1);
     assert.equal(firstMetadata.sessionCount, 1);
     assert.equal(firstSummary.totals.total, 123);
+    assert.ok(Math.abs(firstSummary.costEstimate.totalUsd - 0.00023) < 1e-12);
+    assert.equal(firstSummary.costEstimate.modelCount, 1);
 
     await appendFile(sessionFile, JSON.stringify(tokenRow("2026-07-12T01:02:00.000Z", 200, 160, 30, 40, 7)) + "\n");
 
@@ -76,7 +80,29 @@ test("UsageStore 首次同步并只重建变化文件", async () => {
     assert.equal(refreshed.updatedFileCount, 1);
     assert.equal(refreshedSummary.eventCount, 2);
     assert.equal(refreshedSummary.totals.total, 200);
+    assert.ok(Math.abs(refreshedSummary.costEstimate.totalUsd - 0.0004) < 1e-12);
     assert.equal(unchanged.updatedFileCount, 0);
+  } finally {
+    store.close();
+  }
+});
+
+test("UsageStore 将非 Git 仓库比较项按工作目录归组", async () => {
+  const { homeDir, databaseFile } = await makeStoreFixture();
+  const sessionIndexPath = path.join(homeDir, ".codex", "session_index.jsonl");
+  await writeFile(sessionIndexPath, jsonl([{ id: "store-session", thread_name: "修复用量表格" }]));
+  const store = new UsageStore({ homeDir, databaseFile });
+
+  try {
+    await store.sync();
+    const comparison = store.periodComparison({ now: "2026-07-12T12:00:00.000Z" });
+    const directory = comparison.repositories.find((row) => row.key === "directory:/work/store");
+    const selectedRangeRepository = store.summarize({ preset: "all", bucket: "day" }).repositories[0];
+
+    assert.equal(directory.name, "/work/store");
+    assert.equal(directory.kind, "directory");
+    assert.equal(comparison.repositories.length, 1);
+    assert.deepEqual(selectedRangeRepository.sessionIds, ["store-session"]);
   } finally {
     store.close();
   }
@@ -101,5 +127,37 @@ test("UsageStore 汇总结果与内存索引保持一致", async () => {
     }
   } finally {
     store.close();
+  }
+});
+
+test("UsageStore upgrades schema v2 and reindexes old source files with unknown billing fields", async () => {
+  const { homeDir, databaseFile } = await makeStoreFixture();
+  const initial = new UsageStore({ homeDir, databaseFile });
+  await initial.sync();
+  initial.close();
+
+  const database = new DatabaseSync(databaseFile);
+  database.exec("PRAGMA user_version = 2");
+  for (const column of [
+    "price_version", "service_tier", "context_level", "request_input_tokens", "cache_write_known", "cache_write_tokens",
+  ]) {
+    database.exec(`ALTER TABLE events DROP COLUMN ${column}`);
+  }
+  database.close();
+
+  const migrated = new UsageStore({ homeDir, databaseFile });
+  try {
+    const result = await migrated.sync();
+    const event = migrated.database.prepare(
+      "SELECT cache_write_known, context_level, service_tier, price_version FROM events",
+    ).get();
+    assert.equal(result.updatedFileCount, 1);
+    assert.equal(Number(migrated.database.prepare("PRAGMA user_version").get().user_version), 3);
+    assert.equal(event.cache_write_known, 0);
+    assert.equal(event.context_level, "unknown");
+    assert.equal(event.service_tier, "unknown");
+    assert.equal(event.price_version, "2026-09-23");
+  } finally {
+    migrated.close();
   }
 });

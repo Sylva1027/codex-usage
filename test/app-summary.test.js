@@ -10,32 +10,38 @@ import {
   summarize,
   timelineChannelSegments,
 } from "../public/app.js";
+import { API_PRICING_CHECKED_AT, API_PRICING_MODE, estimateEventCost } from "../src/pricing.js";
 
 test("summarize includes channel breakdowns for timeline buckets", () => {
-  const summary = summarize({
-    events: [
-      {
-        timestamp: "2026-05-26T01:00:00.000Z",
-        sessionId: "desktop-1",
-        channel: "Codex Desktop",
-        total: { total: 200, input: 170, cached: 50, output: 30, reasoning: 5 },
-      },
-      {
-        timestamp: "2026-05-26T02:00:00.000Z",
-        sessionId: "cli-1",
-        channel: "CLI",
-        total: { total: 100, input: 80, cached: 20, output: 20, reasoning: 2 },
-      },
-    ],
-  });
+  setSummaryFilters({ preset: "all", bucket: "day", now: null, startDate: "", endDate: "" });
+  try {
+    const summary = summarize({
+      events: [
+        {
+          timestamp: "2026-05-26T01:00:00.000Z",
+          sessionId: "desktop-1",
+          channel: "Codex Desktop",
+          total: { total: 200, input: 170, cached: 50, output: 30, reasoning: 5 },
+        },
+        {
+          timestamp: "2026-05-26T02:00:00.000Z",
+          sessionId: "cli-1",
+          channel: "CLI",
+          total: { total: 100, input: 80, cached: 20, output: 20, reasoning: 2 },
+        },
+      ],
+    });
 
-  assert.deepEqual(
-    summary.timeline[0].channels.map((channel) => [channel.name, channel.total.total]),
-    [
-      ["Codex Desktop", 200],
-      ["CLI", 100],
-    ],
-  );
+    assert.deepEqual(
+      summary.timeline[0].channels.map((channel) => [channel.name, channel.total.total]),
+      [
+        ["Codex Desktop", 200],
+        ["CLI", 100],
+      ],
+    );
+  } finally {
+    setSummaryFilters({ preset: "today", bucket: "hour", now: null, startDate: "", endDate: "" });
+  }
 });
 
 test("summarize fills a single local day with 24 hourly timeline rows", () => {
@@ -85,7 +91,7 @@ test("summarize fills a single local day with 24 hourly timeline rows", () => {
       ],
     );
     assert.equal(summary.timeline.length, 24);
-    assert.equal(rangeLabel(summary), "2026-05-26 00:00 至 2026-05-27 00:00 · 按小时");
+    assert.equal(rangeLabel(summary), "2026-05-26 至 2026-05-26");
   } finally {
     setSummaryFilters({
       preset: "all",
@@ -95,6 +101,41 @@ test("summarize fills a single local day with 24 hourly timeline rows", () => {
       startDate: "",
       endDate: "",
     });
+  }
+});
+
+test("static summarize totals embedded API cost estimates for the selected events", () => {
+  const costEvent = {
+    timestamp: "2026-05-26T01:00:00.000Z",
+    sessionId: "cost-session",
+    channel: "CLI",
+    model: "gpt-6-sol",
+    detailMask: 15,
+    cacheWriteTokens: 0,
+    cacheWriteKnown: true,
+    contextLevel: "short",
+    serviceTier: "standard",
+    total: { total: 110, input: 100, cached: 20, output: 10, reasoning: 4 },
+  };
+  costEvent.costEstimate = estimateEventCost(costEvent);
+
+  setSummaryFilters({ preset: "all", bucket: "day", now: null, startDate: "", endDate: "" });
+  try {
+    const summary = summarize({
+      pricing: { checkedAt: API_PRICING_CHECKED_AT, mode: API_PRICING_MODE },
+      events: [costEvent],
+    });
+
+    assert.equal(summary.costEstimate.totalUsd, 0.000264);
+    assert.equal(summary.costEstimate.inputUsd, 0.00016);
+    assert.equal(summary.costEstimate.cachedInputUsd, 0.000004);
+    assert.equal(summary.costEstimate.outputUsd, 0.0001);
+    assert.equal(summary.costEstimate.cacheHitRate, 0.2);
+    assert.equal(summary.costEstimate.modelCount, 1);
+    assert.equal(summary.costEstimate.priceCheckedAt, API_PRICING_CHECKED_AT);
+    assert.equal(summary.timeline.reduce((sum, row) => sum + Object.values(row.costByModel).reduce((subtotal, model) => subtotal + model.totalUsd, 0), 0), summary.costEstimate.totalUsd);
+  } finally {
+    setSummaryFilters({ preset: "all", bucket: "day", now: null, startDate: "", endDate: "" });
   }
 });
 
@@ -230,7 +271,7 @@ test("summarize fills recent two-day hourly ranges on natural-day boundaries", (
     assert.equal(summary.timeline[0].key, "2026-06-22 00:00");
     assert.equal(summary.timeline.at(-1).key, "2026-06-23 23:00");
     assert.equal(summary.timeline.length, 48);
-    assert.equal(rangeLabel(summary), "2026-06-22 00:00 至 2026-06-24 00:00 · 按小时");
+    assert.equal(rangeLabel(summary), "2026-06-22 至 2026-06-23");
   } finally {
     setSummaryFilters({
       preset: "all",
@@ -285,7 +326,7 @@ test("summarize uses rolling recent day ranges", () => {
     assert.equal(summary.timeline[0].key, "2026-06-22 10:00");
     assert.equal(summary.timeline.at(-1).key, "2026-06-23 10:00");
     assert.equal(summary.timeline.length, 25);
-    assert.equal(rangeLabel(summary), "2026-06-22 10:45 至 2026-06-23 10:45 · 按小时");
+    assert.equal(rangeLabel(summary), "2026-06-22 至 2026-06-23");
   } finally {
     setSummaryFilters({
       preset: "all",
@@ -413,4 +454,31 @@ test("timelineChannelSegments follows global channel order", () => {
     segments.map((segment) => segment.name),
     ["Codex Desktop", "CLI"],
   );
+});
+
+test("natural week and month slots include future positions without changing range totals", () => {
+  const events = [
+    { timestamp: "2026-05-04T12:00:00", sessionId: "mon", channel: "CLI", total: { total: 100, input: 100, cached: 0, output: 0 } },
+    { timestamp: "2026-05-05T12:00:00", sessionId: "tue", channel: "CLI", total: { total: 200, input: 200, cached: 0, output: 0 } },
+    { timestamp: "2026-05-06T12:00:00", sessionId: "future-week", channel: "CLI", total: { total: 300, input: 300, cached: 0, output: 0 } },
+    { timestamp: "2026-05-31T12:00:00", sessionId: "future-month", channel: "CLI", total: { total: 400, input: 400, cached: 0, output: 0 } },
+  ];
+  try {
+    setSummaryFilters({ preset: "week", bucket: "day", now: "2026-05-05T13:00:00", startDate: "", endDate: "" });
+    const week = summarize({ events });
+    assert.equal(week.timeline.length, 7);
+    assert.equal(week.timeline[0].key, "2026-05-04");
+    assert.equal(week.timeline.at(-1).key, "2026-05-10");
+    assert.equal(week.totals.total, 300);
+    assert.equal(rangeLabel(week), "2026-05-04 至 2026-05-05");
+
+    setSummaryFilters({ preset: "month", bucket: "day", now: "2026-05-05T13:00:00" });
+    const month = summarize({ events });
+    assert.equal(month.timeline.length, 31);
+    assert.equal(month.timeline[0].key, "2026-05-01");
+    assert.equal(month.timeline.at(-1).key, "2026-05-31");
+    assert.equal(month.totals.total, 300);
+  } finally {
+    setSummaryFilters({ preset: "today", recentValue: "1个月", bucket: "hour", now: null, startDate: "", endDate: "" });
+  }
 });

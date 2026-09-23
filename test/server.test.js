@@ -86,12 +86,24 @@ test("server serves the dashboard and usage API", async () => {
     assert.equal(hourly.status, 200);
     assert.equal(hourlyJson.summary.range.bucket, "hour");
     assert.equal(hourlyJson.summary.timeline.length, 24);
+    const activeTimelineRows = hourlyJson.summary.timeline.filter((row) => row.total.total > 0);
     assert.deepEqual(
-      hourlyJson.summary.timeline
-        .filter((row) => row.total.total > 0)
-        .map((row) => [row.key, row.total.total]),
+      activeTimelineRows.map((row) => [row.key, row.total.total]),
       [[localHourKey("2026-05-01T02:01:00.000Z"), 123]],
     );
+    const activeTimelineRow = activeTimelineRows[0];
+    assert.equal(
+      activeTimelineRow.models.reduce((sum, model) => sum + model.total.total, 0),
+      activeTimelineRow.total.total,
+    );
+    assert.equal(typeof activeTimelineRow.costByModel, "object");
+    assert.equal(typeof activeTimelineRow.pricedTokens, "number");
+    assert.equal(typeof activeTimelineRow.unpricedTokens, "number");
+    const timelineCost = hourlyJson.summary.timeline.reduce(
+      (sum, row) => sum + Object.values(row.costByModel).reduce((slot, cost) => slot + cost.totalUsd, 0),
+      0,
+    );
+    assert.ok(Math.abs(timelineCost - hourlyJson.summary.costEstimate.totalUsd) < 1e-12);
     assert.equal(json.metadata.eventCount, 1);
     assert.equal(json.metadata.sessionCount, 1);
     assert.equal(json.metadata.homes[0].status, "active");
@@ -170,13 +182,13 @@ test("server reports status changes and refreshes cached usage reports", async (
 
     const changed = await fetch(`${baseUrl}/api/status?since=${firstUsage.fingerprint}`).then((response) => response.json());
     const refreshed = await fetch(`${baseUrl}/api/usage`).then((response) => response.json());
-    const forced = await fetch(`${baseUrl}/api/usage?force=1`).then((response) => response.json());
+
 
     assert.equal(changed.changed, true);
     assert.notEqual(changed.fingerprint, firstUsage.fingerprint);
     assert.equal(refreshed.summary.totals.total, 200);
-    assert.equal(forced.summary.totals.total, 200);
-    assert.equal(forced.fingerprint, refreshed.fingerprint);
+
+
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

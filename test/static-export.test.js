@@ -14,7 +14,8 @@ test("renderStaticDashboardHtml embeds usage data and app assets", () => {
         sessionId: "s1",
         channel: "CLI",
         cwd: "/work",
-        model: "gpt-5.5",
+        model: "gpt-6-sol",
+        detailMask: 15,
         total: { total: 10, input: 8, cached: 1, output: 2, reasoning: 0 },
       },
     ],
@@ -28,14 +29,27 @@ test("renderStaticDashboardHtml embeds usage data and app assets", () => {
   assert.match(html, /id="usageTooltip"/);
   assert.match(html, /role="tooltip"/);
   assert.match(html, /themeToggle/);
-  assert.match(html, /data-theme-option="dark"/);
+  assert.match(html, /浅色\/深色/);
   assert.match(html, /id="importButton"/);
   assert.match(html, /id="addImportButton"/);
   assert.match(html, /id="importDialog"/);
   assert.match(html, /id="importPath"/);
   assert.match(html, /id="pickImportDirectoryButton"/);
   assert.match(html, /id="comparisonSummary"/);
-  assert.match(html, /id="projectSearch"/);
-  assert.match(html, /id="modelSearch"/);
-  assert.match(html, /id="timelineDetails"/);
+  assert.match(html, /id="totalCost"/);
+  assert.match(html, /id="cacheHitRate"/);
+  assert.match(html, /costEstimate/);
+  assert.match(html, /按模型/);
+  assert.match(html, /按仓库/);
+  assert.doesNotMatch(html, /id="timelineDetails"/);
+  assert.doesNotMatch(html, /id="projectList"/);
+  assert.doesNotMatch(html, /id="modelList"/);
+});
+
+test("renderStaticDashboardHtml bundles shared timeline logic and has no unresolved imports", () => {
+  const html = renderStaticDashboardHtml({ generatedAt: "2026-05-25T00:00:00.000Z", homes: [], sessions: [], events: [], warnings: [] });
+  assert.match(html, /function buildTimelineRows/);
+  assert.match(html, /id="autoRefreshToggle"/);
+  assert.match(html, /id="timelineModes"/);
+  assert.doesNotMatch(html, /import \{ buildTimelineRows \} from/);
 });

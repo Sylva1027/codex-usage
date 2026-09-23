@@ -11,6 +11,7 @@ import {
   buildUsageFingerprint,
   buildUsageReport,
   classifyImportDirectory,
+  summarizePeriodComparison,
   summarizeUsage,
 } from "./usage-core.js";
 import { UsageStore } from "./usage-store.js";
@@ -211,17 +212,17 @@ export function createUsageServer(options = {}) {
     };
   }
 
-  async function loadUsageStore({ force = false, check = true } = {}) {
+  async function loadUsageStore({ check = true } = {}) {
     const currentUsageOptions = await usageOptions(options);
     if (syncPromise) {
       return syncPromise;
     }
-    if (!force && !check && storeStatus) {
+    if (!check && storeStatus) {
       return { ...storeStatus, checkedAt: new Date().toISOString() };
     }
     if (!syncPromise) {
       syncPromise = usageStore
-        .sync({ force, options: currentUsageOptions })
+        .sync({ options: currentUsageOptions })
         .then((status) => {
           storeStatus = status;
           return status;
@@ -299,7 +300,7 @@ export function createUsageServer(options = {}) {
       }
 
       if (url.pathname === "/api/usage") {
-        const force = url.searchParams.get("force") === "1";
+
         const detail = url.searchParams.get("detail");
         if (detail === "full") {
           if (!isFullDetailHeapAvailable()) {
@@ -313,6 +314,8 @@ export function createUsageServer(options = {}) {
           const currentUsageOptions = await usageOptions(options);
           const status = await buildUsageFingerprint(currentUsageOptions);
           const report = await buildUsageReport(currentUsageOptions);
+          const asOf = new Date();
+          const filters = { ...requestFilters(url), now: asOf };
           sendJson(response, 200, {
             fingerprint: status.fingerprint,
             checkedAt: status.checkedAt,
@@ -326,29 +329,36 @@ export function createUsageServer(options = {}) {
               warnings: report.warnings,
             },
             report,
-            summary: summarizeUsage(report, requestFilters(url)),
+            summary: summarizeUsage(report, filters),
+            periodComparison: summarizePeriodComparison(report.events, { now: asOf }),
           });
           return;
         }
 
         const check = url.searchParams.get("skipCheck") !== "1";
-        const usage = await loadUsageStore({ force, check });
+        const usage = await loadUsageStore({ check });
+        const asOf = new Date();
+        const filters = { ...requestFilters(url), now: asOf };
         sendJson(response, 200, {
           fingerprint: usage.fingerprint,
           checkedAt: usage.checkedAt,
           metadata: await metadataForStore(),
-          summary: usageStore.summarize(requestFilters(url)),
+          summary: usageStore.summarize(filters),
+          periodComparison: usageStore.periodComparison({ now: asOf }),
         });
         return;
       }
 
       if (url.pathname === "/api/summary") {
         const usage = await loadUsageStore();
+        const asOf = new Date();
+        const filters = { ...requestFilters(url), now: asOf };
         sendJson(response, 200, {
           fingerprint: usage.fingerprint,
           checkedAt: usage.checkedAt,
           metadata: await metadataForStore(),
-          summary: usageStore.summarize(requestFilters(url)),
+          summary: usageStore.summarize(filters),
+          periodComparison: usageStore.periodComparison({ now: asOf }),
         });
         return;
       }
