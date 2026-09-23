@@ -70,7 +70,7 @@ test("comparison sort cycles through descending, ascending, and default order", 
     { key: "git:medium", name: "/work/medium", kind: "git", periods: { today: { total: 20 } } },
   ];
   const rowNames = (sort, kind) => [...renderPeriodComparisonTableHtml(rows, { kind, sort })
-    .matchAll(/class="comparison-row-label">([^<]+)<\/span>/g)].map((match) => match[1]);
+    .matchAll(/class="comparison-row-label"[^>]*>([^<]+)<\/span>/g)].map((match) => match[1]);
   assert.deepEqual(rowNames(defaultSort, "repository"), ["medium", "small", "large"]);
   assert.deepEqual(rowNames(ascending, "repository"), ["small", "medium", "large"]);
   assert.deepEqual(rowNames(cancelled, "repository"), ["medium", "small", "large"]);
