@@ -13,12 +13,14 @@ import {
   nextComparisonSort,
   formatTokenMillions,
   renderBarListHtml,
+  renderCostDetailHtml,
   renderComparisonHtml,
   renderDatePickerHtml,
   renderHomesHtml,
   renderPeriodComparisonTableHtml,
   setSummaryFilters,
   timelineAxisLabels,
+  timelineDetailRows,
 } from "../public/app.js";
 
 test("token values use two decimal places in millions and retain exact hover values", () => {
@@ -54,6 +56,47 @@ test("token values use two decimal places in millions and retain exact hover val
   assert.match(expandedHtml, /id="model-period-0-detail"/);
 });
 
+test("timeline details follow channel, model, and cost modes", () => {
+  const channels = [{ name: "CLI", total: { total: 20 } }];
+  const models = [{ name: "gpt-6-sol", total: { total: 20 } }];
+  const summary = {
+    channels,
+    models,
+    timeline: [
+      { costByModel: { "gpt-6-sol": { totalUsd: 0.3 }, "gpt-6-luna": { totalUsd: 0.1 } } },
+      { costByModel: { "gpt-6-sol": { totalUsd: 0.2 }, "gpt-6-luna": { totalUsd: 0.5 } } },
+    ],
+  };
+  assert.equal(timelineDetailRows(summary, "channel"), channels);
+  assert.equal(timelineDetailRows(summary, "model"), models);
+  assert.deepEqual(timelineDetailRows(summary, "cost"), [
+    { name: "gpt-6-luna", totalUsd: 0.6 },
+    { name: "gpt-6-sol", totalUsd: 0.5 },
+  ]);
+  assert.deepEqual(timelineDetailRows({ ...summary, timelineError: "too many slots" }, "cost"), []);
+});
+
+test("cost details show model amounts and escape model names", () => {
+  const oldDocument = globalThis.document;
+  globalThis.document = { documentElement: { dataset: { theme: "light" } } };
+  try {
+    const html = renderCostDetailHtml([
+      { name: '<img src=x onerror="alert(1)">', totalUsd: 1.25 },
+      { name: "gpt-6-sol", totalUsd: 0.5 },
+      { name: "gpt-6-luna", totalUsd: 1.256 },
+    ]);
+    assert.match(html, /\$1\.25/);
+    assert.match(html, /\$0\.50/);
+    assert.match(html, /\$1\.26/);
+    assert.doesNotMatch(html, /\$1\.256/);
+    assert.match(html, /width: 40%/);
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /&lt;img/);
+  } finally {
+    if (oldDocument === undefined) delete globalThis.document;
+    else globalThis.document = oldDocument;
+  }
+});
 test("comparison sort cycles through descending, ascending, and default order", () => {
   const defaultSort = { period: "today", direction: "desc", showIndicator: false };
   const descending = nextComparisonSort(defaultSort, "today");

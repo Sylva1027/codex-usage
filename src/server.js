@@ -271,6 +271,7 @@ export function createUsageServer(options = {}) {
       const store = new UsageStore({ databaseFile });
       await store.open();
       store.homes = structuredClone(usageStore.homes);
+      store.serviceTierEvidence = usageStore.serviceTierEvidence;
       store.warnings = [...usageStore.warnings];
       const snapshot = {
         store,

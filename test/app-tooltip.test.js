@@ -65,7 +65,7 @@ test("formatTimelineTooltip exposes priced model costs and never labels unpriced
     cacheWriteUnknownTokens: 80,
   }, "cost");
   assert.match(priced, /2026-05-01/);
-  assert.match(priced, /已计价估算/);
+  assert.match(priced, /费用估算/);
   assert.match(priced, /\$0\.00/);
   assert.match(priced, /未计价 80 tokens/);
   assert.match(priced, /缓存写入明细未知/);

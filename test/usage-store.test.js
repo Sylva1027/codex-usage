@@ -68,7 +68,7 @@ test("UsageStore 首次同步并只重建变化文件", async () => {
     assert.equal(firstMetadata.eventCount, 1);
     assert.equal(firstMetadata.sessionCount, 1);
     assert.equal(firstSummary.totals.total, 123);
-    assert.ok(Math.abs(firstSummary.costEstimate.totalUsd - 0.00023) < 1e-12);
+    assert.ok(Math.abs(firstSummary.costEstimate.totalUsd - 0.000394) < 1e-12);
     assert.equal(firstSummary.costEstimate.modelCount, 1);
 
     await appendFile(sessionFile, JSON.stringify(tokenRow("2026-07-12T01:02:00.000Z", 200, 160, 30, 40, 7)) + "\n");
@@ -80,7 +80,7 @@ test("UsageStore 首次同步并只重建变化文件", async () => {
     assert.equal(refreshed.updatedFileCount, 1);
     assert.equal(refreshedSummary.eventCount, 2);
     assert.equal(refreshedSummary.totals.total, 200);
-    assert.ok(Math.abs(refreshedSummary.costEstimate.totalUsd - 0.0004) < 1e-12);
+    assert.ok(Math.abs(refreshedSummary.costEstimate.totalUsd - 0.000666) < 1e-12);
     assert.equal(unchanged.updatedFileCount, 0);
   } finally {
     store.close();
@@ -194,7 +194,7 @@ test("UsageStore upgrades schema v2 and reindexes old source files with unknown 
       "SELECT cache_write_known, context_level, service_tier, price_version FROM events",
     ).get();
     assert.equal(result.updatedFileCount, 1);
-    assert.equal(Number(migrated.database.prepare("PRAGMA user_version").get().user_version), 3);
+    assert.equal(Number(migrated.database.prepare("PRAGMA user_version").get().user_version), 5);
     assert.equal(event.cache_write_known, 0);
     assert.equal(event.context_level, "unknown");
     assert.equal(event.service_tier, "unknown");

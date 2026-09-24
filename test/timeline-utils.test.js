@@ -99,7 +99,8 @@ test("each slot preserves channel/model token totals and aggregates event-level 
   assert.equal(row.channels.reduce((sum, channel) => sum + channel.total.total, 0), row.total.total);
   assert.equal(row.models.reduce((sum, model) => sum + model.total.total, 0), row.total.total);
   assert.equal(Object.values(row.costByModel).reduce((sum, model) => sum + model.totalUsd, 0), expected.totalUsd);
-  assert.equal(row.unpricedTokens, 10);
-  assert.equal(row.pricingStatus, "partial");
-  assert.equal(row.costByModel["custom-model"].pricingStatus, "unpriced");
+  assert.equal(row.unpricedTokens, 0);
+  assert.equal(row.minimumEstimatedTokens, 10);
+  assert.equal(row.pricingStatus, "minimum-estimate");
+  assert.equal(row.costByModel["custom-model"].pricingStatus, "minimum-estimate");
 });

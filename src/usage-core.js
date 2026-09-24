@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 
 import { createRepositoryResolver } from "./repository-identity.js";
 import { createCostEstimateAccumulator, estimateCostForEvents, estimateEventCost, LONG_CONTEXT_INPUT_THRESHOLD, pricingVersionForTimestamp } from "./pricing.js";
+import { loadServiceTierEvidence } from "./service-tier-evidence.js";
 import { buildTimelineRows } from "../public/timeline-utils.js";
 
 const SESSION_DIRS = ["sessions", "archived_sessions"];
@@ -47,11 +48,12 @@ function readCacheWrite(raw = {}) {
 
 function readServiceTier(row = {}, payload = {}) {
   const values = [
-    row.service_tier,
-    payload.service_tier,
-    payload.info?.service_tier,
-    payload.response?.service_tier,
     payload.info?.response?.service_tier,
+    payload.response?.service_tier,
+    row.response?.service_tier,
+    payload.info?.service_tier,
+    payload.service_tier,
+    row.service_tier,
   ];
   const value = values.find((candidate) => typeof candidate === "string" && candidate.trim());
   return value ? value.trim().toLowerCase() : "unknown";
@@ -165,6 +167,19 @@ function diffUsage(current, previous, currentMask = USAGE_DETAIL_MASK.complete, 
     }
   }
   return { usage: diff, detailMask };
+}
+
+function rememberSessionUsage(baselines, sessionId, usage, detailMask, cacheWriteTokens, cacheWriteKnown) {
+  const baseline = baselines.get(sessionId) || {
+    usage: emptyUsage(),
+    detailMask: USAGE_DETAIL_MASK.complete,
+    cacheWrite: { tokens: 0, known: true },
+  };
+  addUsage(baseline.usage, usage);
+  baseline.detailMask &= detailMask & USAGE_DETAIL_MASK.complete;
+  baseline.cacheWrite.tokens += cacheWriteTokens || 0;
+  baseline.cacheWrite.known &&= Boolean(cacheWriteKnown);
+  baselines.set(sessionId, baseline);
 }
 
 function isZeroUsage(usage) {
@@ -501,6 +516,7 @@ export async function parseSessionFile(filePath, home, options = {}) {
   let previousCumulative = emptyUsage();
   let previousCumulativeMask = USAGE_DETAIL_MASK.complete;
   let previousCumulativeCacheWrite = { tokens: 0, known: false };
+  let baselineLoaded = false;
   let finalUsage = emptyUsage();
   let tokenEventCount = 0;
   const events = [];
@@ -531,6 +547,15 @@ export async function parseSessionFile(filePath, home, options = {}) {
       continue;
     }
 
+    if (!baselineLoaded && options.previousCumulativeForSession) {
+      const baseline = await options.previousCumulativeForSession(meta.id, row.timestamp || lastAt);
+      if (baseline) {
+        previousCumulative = baseline.usage;
+        previousCumulativeMask = baseline.detailMask;
+        previousCumulativeCacheWrite = baseline.cacheWrite;
+      }
+      baselineLoaded = true;
+    }
     const { cumulative, cumulativeMask, cumulativeCacheWrite, last, lastMask, lastCacheWrite, serviceTier } = readTokenUsage(row.payload, row);
     let increment = emptyUsage();
     let detailMask = 0;
@@ -552,7 +577,8 @@ export async function parseSessionFile(filePath, home, options = {}) {
       cacheWrite = lastCacheWrite;
       addUsage(finalUsage, last);
     }
-    const context = contextForEvent(lastMatchesDelta, increment, detailMask);
+    const requestUsage = last && (!cumulative || lastMatchesDelta) ? last : null;
+    const context = contextForEvent(Boolean(requestUsage), requestUsage || increment, requestUsage ? lastMask : detailMask);
 
     if (isZeroUsage(increment)) {
       continue;
@@ -837,6 +863,7 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent, options = {
   let previousCumulative = emptyUsage();
   let previousCumulativeMask = USAGE_DETAIL_MASK.complete;
   let previousCumulativeCacheWrite = { tokens: 0, known: false };
+  let baselineLoaded = false;
 
   for await (const row of readJsonlRows(filePath)) {
     if (row.timestamp) {
@@ -861,6 +888,15 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent, options = {
       continue;
     }
 
+    if (!baselineLoaded && options.previousCumulativeForSession) {
+      const baseline = await options.previousCumulativeForSession(meta.id, row.timestamp || lastAt);
+      if (baseline) {
+        previousCumulative = baseline.usage;
+        previousCumulativeMask = baseline.detailMask;
+        previousCumulativeCacheWrite = baseline.cacheWrite;
+      }
+      baselineLoaded = true;
+    }
     const { cumulative, cumulativeMask, cumulativeCacheWrite, last, lastMask, lastCacheWrite, serviceTier } = readTokenUsage(row.payload, row);
     let increment = emptyUsage();
     let detailMask = 0;
@@ -880,7 +916,8 @@ async function streamSessionUsageFileEvents(filePath, home, onEvent, options = {
       detailMask = lastMask;
       cacheWrite = lastCacheWrite;
     }
-    const context = contextForEvent(lastMatchesDelta, increment, detailMask);
+    const requestUsage = last && (!cumulative || lastMatchesDelta) ? last : null;
+    const context = contextForEvent(Boolean(requestUsage), requestUsage || increment, requestUsage ? lastMask : detailMask);
 
     if (isZeroUsage(increment)) {
       continue;
@@ -981,7 +1018,7 @@ export async function streamUsageFileEvents(filePath, source, onEvent, options =
   await streamSessionUsageFileEvents(filePath, source, onEvent, options);
 }
 
-async function parseSessionFileForIndex(filePath, home, intern, resolveRepository) {
+async function parseSessionFileForIndex(filePath, home, intern, resolveRepository, previousCumulativeForSession) {
   const events = [];
   await streamSessionUsageFileEvents(filePath, home, (event) => {
     events.push({
@@ -1009,7 +1046,7 @@ async function parseSessionFileForIndex(filePath, home, intern, resolveRepositor
       serviceTier: intern(event.serviceTier),
       priceVersion: intern(event.priceVersion),
     });
-  }, { repositoryResolver: resolveRepository });
+  }, { repositoryResolver: resolveRepository, previousCumulativeForSession });
   return events;
 }
 
@@ -1065,6 +1102,7 @@ export async function buildUsageReport(options = {}) {
     }
 
     const threadNames = await readSessionThreadNames(home.path);
+    const previousBySession = new Map();
     let files = [];
     try {
       files = await discoverSessionFiles(home.path);
@@ -1075,18 +1113,25 @@ export async function buildUsageReport(options = {}) {
 
     for (const file of files) {
       try {
-        const parsed = await parseSessionFile(file, home, { repositoryResolver, threadNames });
+        const parsed = await parseSessionFile(file, home, { repositoryResolver, threadNames, previousCumulativeForSession: (sessionId) => previousBySession.get(sessionId) });
         if (!parsed) {
           continue;
         }
         sessions.push(parsed.session);
         events.push(...parsed.events);
+        for (const event of parsed.events) {
+          rememberSessionUsage(previousBySession, event.sessionId, event.total, event.detailMask, event.cacheWriteTokens, event.cacheWriteKnown);
+        }
       } catch (error) {
         warnings.push(`无法解析 ${file}: ${error.message}`);
       }
     }
   }
 
+  const tierEvidence = loadServiceTierEvidence(homes);
+  for (const event of events) {
+    event.serviceTier = tierEvidence.resolve(event.sessionId, Date.parse(event.timestamp), event.serviceTier);
+  }
   events.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
   sessions.sort((a, b) => Date.parse(a.lastAt) - Date.parse(b.lastAt));
 
@@ -1116,6 +1161,7 @@ export async function buildUsageIndex(options = {}) {
       continue;
     }
 
+    const previousBySession = new Map();
     let files = [];
     try {
       files = await discoverSessionFiles(home.path);
@@ -1126,13 +1172,23 @@ export async function buildUsageIndex(options = {}) {
 
     for (const file of files) {
       try {
-        events.push(...(await parseSessionFileForIndex(file, home, interner.intern, repositoryResolver)));
+        const parsed = await parseSessionFileForIndex(file, home, interner.intern, repositoryResolver,
+          (sessionId) => previousBySession.get(sessionId));
+        events.push(...parsed);
+        for (const event of parsed) {
+          rememberSessionUsage(previousBySession, interner.values[event.s], event, event.detailMask, event.cacheWriteTokens, event.cacheWriteKnown);
+        }
       } catch (error) {
         warnings.push(`无法解析 ${file}: ${error.message}`);
       }
     }
   }
 
+  const tierEvidence = loadServiceTierEvidence(homes);
+  for (const event of events) {
+    const tier = tierEvidence.resolve(interner.values[event.s], event.t, interner.values[event.serviceTier]);
+    event.serviceTier = interner.intern(tier);
+  }
   events.sort((a, b) => a.t - b.t);
 
   return {

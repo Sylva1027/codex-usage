@@ -8,8 +8,7 @@
       (() => {
         try {
           const saved = localStorage.getItem("codexUsageTheme");
-          const fallback = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-          document.documentElement.dataset.theme = saved || fallback;
+          document.documentElement.dataset.theme = saved === "dark" ? "dark" : "light";
         } catch {
           document.documentElement.dataset.theme = "light";
         }
@@ -195,16 +194,19 @@
               <button type="button" data-timeline-mode="cost" aria-pressed="false">按花销</button>
             </div>
           </div>
-          <canvas id="timelineChart" width="960" height="320" tabindex="0" role="img" aria-label="时间分布柱状图；聚焦后可查看用量详情"></canvas>
+          <div class="timeline-chart-well">
+            <canvas id="timelineChart" width="960" height="320" tabindex="0" role="img" aria-label="时间分布柱状图；聚焦后可查看用量详情"></canvas>
+          </div>
           <p id="timelineRangeWarning" class="timeline-range-warning" role="status" hidden></p>
           <div id="timelineLegend" class="timeline-legend" role="list" aria-label="图表图例"></div>
         </section>
 
-        <section class="panel channel-panel">
+        <section class="panel detail-panel" aria-label="时间分布详情">
           <div class="panel-heading">
-            <h2>渠道分布</h2>
+            <h2>详情</h2>
+            <span id="detailModeLabel">按渠道</span>
           </div>
-          <div id="channelList" class="bar-list"></div>
+          <div id="detailList" class="bar-list"></div>
         </section>
       </section>
 

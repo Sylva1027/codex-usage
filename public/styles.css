@@ -245,7 +245,6 @@ label {
 #pickImportDirectoryButton,
 .panel-action,
 .dialog-actions button,
-.theme-toggle,
 .segmented button,
 .segmented .recent-segment {
   border: 1px solid var(--line);
@@ -262,7 +261,6 @@ label {
 #pickImportDirectoryButton:hover,
 .panel-action:hover,
 .dialog-actions button:hover,
-.theme-toggle:hover,
 .segmented button:hover,
 .segmented .recent-segment:hover {
   border-color: var(--control-hover);
@@ -1019,7 +1017,7 @@ select {
 }
 
 .chart-panel,
-.channel-panel {
+.detail-panel {
   display: flex;
   flex-direction: column;
   height: auto;
@@ -1027,7 +1025,7 @@ select {
   overflow: hidden;
 }
 
-.channel-panel > .panel-heading {
+.detail-panel > .panel-heading {
   min-height: 30px;
 }
 
@@ -1038,7 +1036,7 @@ select {
   height: 220px;
 }
 
-.channel-panel .bar-list {
+.detail-panel .bar-list {
   flex: 1;
   min-height: 0;
   align-content: start;
@@ -1408,4 +1406,217 @@ select {
   .main-grid > .chart-panel {
     grid-column: auto;
   }
+}
+
+/* Shared neumorphic surfaces. Dark mode uses compact exterior shadows. */
+:root {
+  --bg: #edf2f7;
+  --panel: #edf2f7;
+  --control: #edf2f7;
+  --track: #e3eaf1;
+  --neo-surface: #edf2f7;
+  --neo-edge: rgba(255, 255, 255, 0.7);
+  --neo-raised: 7px 7px 16px rgba(149, 165, 183, 0.28),
+    -7px -7px 16px rgba(255, 255, 255, 0.92);
+  --neo-raised-small: 4px 4px 9px rgba(149, 165, 183, 0.28),
+    -4px -4px 9px rgba(255, 255, 255, 0.9);
+  --neo-inset: inset 5px 5px 10px rgba(149, 165, 183, 0.25),
+    inset -5px -5px 10px rgba(255, 255, 255, 0.85);
+  --neo-inset-small: inset 3px 3px 6px rgba(149, 165, 183, 0.28),
+    inset -3px -3px 6px rgba(255, 255, 255, 0.8);
+  --shadow: var(--neo-raised);
+}
+
+[data-theme="dark"] {
+  --bg: #151b21;
+  --panel: #1b2229;
+  --control: #1b2229;
+  --track: #252e37;
+  --neo-surface: #1b2229;
+  --neo-edge: rgba(255, 255, 255, 0.045);
+  --neo-raised: 0 6px 14px rgba(0, 0, 0, 0.22);
+  --neo-raised-small: 0 3px 8px rgba(0, 0, 0, 0.24);
+  --neo-inset: inset 4px 4px 9px rgba(0, 0, 0, 0.38),
+    inset -3px -3px 8px rgba(54, 65, 75, 0.18);
+  --neo-inset-small: inset 3px 3px 6px rgba(0, 0, 0, 0.42),
+    inset -2px -2px 5px rgba(54, 65, 75, 0.16);
+  --shadow: var(--neo-raised);
+}
+
+.toolbar,
+.comparison-item,
+.metric,
+.panel,
+.dialog {
+  border: 1px solid var(--neo-edge);
+  background: var(--neo-surface);
+  box-shadow: var(--neo-raised);
+}
+
+.toolbar,
+.panel,
+.dialog {
+  border-radius: 21px;
+}
+
+.toolbar { padding: 18px; }
+
+.metric,
+.comparison-item {
+  border-radius: 17px;
+  box-shadow: var(--neo-raised-small);
+}
+
+.metric { padding: 17px; }
+.comparison-item { padding: 16px; }
+.panel { padding: 20px; }
+.chart-panel { padding: 22px; border-radius: 24px; }
+.dialog { padding: 22px; }
+
+.chart-panel .timeline-heading { margin-bottom: 18px; }
+#importButton,
+#pickImportDirectoryButton,
+.panel-action,
+.dialog-actions button,
+.segmented button,
+.segmented .recent-segment,
+.home-remove,
+.icon-button {
+  border: 1px solid var(--neo-edge);
+  border-radius: 11px;
+  background: var(--neo-surface);
+  color: var(--ink);
+  box-shadow: var(--neo-raised-small);
+}
+
+#importButton:hover,
+#pickImportDirectoryButton:hover,
+.panel-action:hover,
+.dialog-actions button:hover,
+.segmented button:hover,
+.segmented .recent-segment:hover,
+.home-remove:hover,
+.icon-button:hover {
+  border-color: var(--control-hover);
+}
+
+.segmented button.active,
+.segmented .recent-segment.active,
+.chart-panel .timeline-mode-select button.active,
+.chart-panel .timeline-mode-select button[aria-pressed="true"] {
+  border-color: transparent;
+  background: var(--neo-surface);
+  color: var(--blue);
+  box-shadow: var(--neo-inset-small);
+}
+
+.chart-panel .timeline-mode-select button {
+  min-height: 34px;
+  padding-inline: 12px;
+  transition: box-shadow 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.chart-panel .timeline-mode-select button:hover {
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.chart-panel .timeline-mode-select button.active:hover {
+  color: var(--blue);
+  transform: none;
+}
+
+#submitImportButton,
+#savePricingButton {
+  border-color: var(--blue);
+  background: var(--blue);
+  color: var(--active-ink);
+  box-shadow: var(--neo-raised-small);
+}
+
+input,
+select,
+.recent-combobox,
+.comparison-table-scroll,
+.bar-track,
+.pricing-model {
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: var(--neo-surface);
+  box-shadow: var(--neo-inset);
+}
+
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.recent-combobox {
+  border-radius: 8px;
+  box-shadow: var(--neo-inset-small);
+}
+
+.recent-segment-input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.date-picker-button {
+  border-left-color: var(--line);
+  border-radius: 0 10px 10px 0;
+}
+
+.date-picker-popover,
+.recent-range-menu,
+.usage-tooltip {
+  border: 1px solid var(--neo-edge);
+  border-radius: 15px;
+  background: var(--neo-surface);
+  box-shadow: var(--neo-raised);
+}
+
+.recent-range-menu button[aria-selected="true"],
+.date-picker-day.selected {
+  border-color: transparent;
+  background: var(--neo-surface);
+  color: var(--blue);
+  box-shadow: var(--neo-inset-small);
+}
+
+.date-picker-nav,
+.date-picker-day { border-radius: 9px; }
+
+.date-picker-nav:hover,
+.date-picker-day:hover {
+  border-color: var(--neo-edge);
+  background: var(--neo-surface);
+  box-shadow: var(--neo-raised-small);
+}
+
+.comparison-table-scroll { border-radius: 13px; }
+.bar-track {
+  border-radius: 999px;
+  box-shadow: var(--neo-inset-small);
+}
+.pricing-model { border-radius: 13px; }
+
+.timeline-chart-well {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: var(--neo-surface);
+  box-shadow: var(--neo-inset);
+}
+
+.chart-panel .timeline-legend { padding-top: 14px; }
+
+@media (max-width: 720px) {
+  .toolbar,
+  .panel,
+  .dialog { padding: 18px; }
+  .timeline-chart-well { padding: 8px; }
 }

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 export const API_PRICING_CHECKED_AT = "2026-09-23";
 export const API_PRICING_VERSION = "2026-09-23";
-export const API_PRICING_MODE = "standard-scenario";
+export const API_PRICING_MODE = "minimum-fallback-scenario";
 export const API_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing";
 export const LONG_CONTEXT_INPUT_THRESHOLD = 272_000;
 
@@ -128,30 +128,51 @@ function normalizeServiceTier(value) {
   return "unknown";
 }
 
+function minimumRatesFor(modelKey, contextLevel) {
+  const catalogs = modelKey ? [activePricing.models[modelKey]] : Object.values(activePricing.models);
+  const contexts = contextLevel === "unknown" ? ["short", "long"] : [contextLevel];
+  const candidates = catalogs.flatMap((catalog) => contexts.map((context) => catalog?.[context]).filter(Boolean));
+  if (!candidates.length) return null;
+  const rates = {};
+  for (const category of ["input", "cachedInput", "cacheWrite", "output"]) {
+    rates[category] = Math.min(...candidates.map((candidate) => candidate[category]));
+  }
+  return rates;
+}
+
+function minimumCategory(rates, categories) {
+  return categories.reduce((lowest, category) =>
+    rates[category] < rates[lowest] ? category : lowest, categories[0]);
+}
+
 function estimateEventCost(event = {}) {
   const model = normalizeModel(event.model);
   const usage = usageFields(event);
   const total = usage.total || (usage.input || 0) + (usage.output || 0);
   const version = activePricing.version;
-  const ratesByContext = activePricing.models[model.key];
+  const contextLevel = event.contextLevel === "long" ? "long" : event.contextLevel === "short" ? "short" : "unknown";
+  const serviceTier = normalizeServiceTier(event.serviceTier ?? event.service_tier);
+  const multiplier = serviceTier === "fast" ? 2 : 1;
+  const rates = minimumRatesFor(model.key, contextLevel);
+  const minimumModelRate = !model.key;
+  const cacheWriteTokens = finiteNonNegative(event.cacheWriteTokens);
+  const cacheWriteKnown = event.cacheWriteKnown === true || (Number.isInteger(event.detailMask) && Boolean(event.detailMask & 32));
+  const knownOrInferredInput = usage.inputKnown ? usage.input
+    : usage.outputKnown ? Math.max(0, total - usage.output) : null;
+  const cacheWriteUnknownTokens = !cacheWriteKnown || cacheWriteTokens === null
+    ? knownOrInferredInput === null ? 0
+      : Math.max(0, knownOrInferredInput - (usage.cachedKnown ? Math.min(usage.cached, knownOrInferredInput) : 0))
+    : 0;
   const reasons = [];
   let inputUsd = 0;
   let cachedInputUsd = 0;
   let cacheWriteInputUsd = 0;
   let outputUsd = 0;
+  let minimumEstimatedTokens = 0;
   let pricedTokens = 0;
   let unpricedTokens = 0;
-  const cacheWriteTokens = finiteNonNegative(event.cacheWriteTokens);
-  const cacheWriteKnown = event.cacheWriteKnown === true || (Number.isInteger(event.detailMask) && Boolean(event.detailMask & 32));
-  const contextLevel = event.contextLevel === "long" ? "long" : event.contextLevel === "short" ? "short" : "unknown";
-  const serviceTier = normalizeServiceTier(event.serviceTier ?? event.service_tier);
-  const ratesContext = contextLevel === "long" ? "long" : "short";
-  const rates = ratesByContext?.[ratesContext];
-  const multiplier = serviceTier === "fast" ? 2 : 1;
 
   if (!rates) {
-    reasons.push("unknown-model-price");
-    unpricedTokens = total;
     return {
       model: model.name,
       priceVersion: version,
@@ -163,53 +184,86 @@ function estimateEventCost(event = {}) {
       outputUsd: 0,
       totalUsd: null,
       pricedTokens: 0,
-      unpricedTokens,
+      unpricedTokens: total,
+      minimumEstimatedTokens: 0,
+      minimumRateModels: [],
       unpricedModels: [model.name],
-      unpricedReasons: reasons,
+      unpricedReasons: ["no-pricing-catalog"],
       serviceTierUnknownTokens: 0,
       contextUnknownTokens: 0,
-      cacheWriteUnknownTokens: usage.inputKnown ? usage.input || 0 : 0,
+      cacheWriteUnknownTokens,
       pricingStatus: "unpriced",
     };
   }
 
-  const inputDetailsValid = usage.inputKnown && usage.cachedKnown && cacheWriteKnown &&
-    !usage.inconsistent && usage.cached <= usage.input &&
-    cacheWriteTokens !== null && usage.cached + cacheWriteTokens <= usage.input;
-  if (inputDetailsValid) {
-    const ordinaryInputTokens = usage.input - usage.cached - cacheWriteTokens;
-    inputUsd = (ordinaryInputTokens * rates.input * multiplier) / USD_PER_MILLION_TOKENS;
-    cachedInputUsd = (usage.cached * rates.cachedInput * multiplier) / USD_PER_MILLION_TOKENS;
-    cacheWriteInputUsd = (cacheWriteTokens * rates.cacheWrite * multiplier) / USD_PER_MILLION_TOKENS;
-    pricedTokens += usage.input;
+  function addCost(tokens, category, minimum = false) {
+    if (!(tokens > 0)) return;
+    const amount = (tokens * rates[category] * multiplier) / USD_PER_MILLION_TOKENS;
+    if (category === "cachedInput") cachedInputUsd += amount;
+    else if (category === "cacheWrite") cacheWriteInputUsd += amount;
+    else if (category === "output") outputUsd += amount;
+    else inputUsd += amount;
+    pricedTokens += tokens;
+    if (minimum) minimumEstimatedTokens += tokens;
+  }
+
+  function addMinimum(tokens, categories) {
+    addCost(tokens, minimumCategory(rates, categories), true);
+  }
+
+  const allCategories = ["input", "cachedInput", "cacheWrite", "output"];
+  const countsInconsistent = usage.inconsistent ||
+    (usage.inputKnown && usage.input > total) ||
+    (usage.outputKnown && usage.output > total) ||
+    (usage.inputKnown && usage.outputKnown && usage.input + usage.output !== total);
+  if (countsInconsistent) {
+    reasons.push("usage-detail-inconsistent-minimum-scenario");
+    addMinimum(total, allCategories);
   } else {
-    const unknownInput = usage.inputKnown ? usage.input : Math.max(0, total - (usage.outputKnown ? usage.output : 0));
-    unpricedTokens += unknownInput;
-    if (!usage.inputKnown) reasons.push("input-detail-missing");
-    if (!usage.cachedKnown) reasons.push("cached-input-detail-missing");
-    if (!cacheWriteKnown || cacheWriteTokens === null) reasons.push("cache-write-detail-missing");
-    if (usage.inconsistent || (usage.inputKnown && usage.cachedKnown && usage.cached > usage.input) ||
-        (usage.inputKnown && cacheWriteTokens !== null && usage.cached + cacheWriteTokens > usage.input)) {
-      reasons.push("input-detail-inconsistent");
+    const inferredInput = knownOrInferredInput;
+    if (inferredInput !== null) {
+      const input = inferredInput;
+      if (!usage.inputKnown) reasons.push("input-detail-inferred-from-total");
+      const cachedValid = usage.cachedKnown && usage.cached <= input;
+      const writeValid = cacheWriteKnown && cacheWriteTokens !== null && cacheWriteTokens <= input;
+      if (cachedValid && writeValid && usage.cached + cacheWriteTokens <= input) {
+        addCost(input - usage.cached - cacheWriteTokens, "input");
+        addCost(usage.cached, "cachedInput");
+        addCost(cacheWriteTokens, "cacheWrite");
+      } else if (cachedValid && !writeValid && !cacheWriteKnown) {
+        addCost(usage.cached, "cachedInput");
+        addMinimum(input - usage.cached, ["input", "cacheWrite"]);
+      } else if (writeValid && !cachedValid && !usage.cachedKnown) {
+        addCost(cacheWriteTokens, "cacheWrite");
+        addMinimum(input - cacheWriteTokens, ["input", "cachedInput"]);
+      } else {
+        reasons.push("input-detail-inconsistent-minimum-scenario");
+        addMinimum(input, ["input", "cachedInput", "cacheWrite"]);
+      }
+      if (!usage.cachedKnown) reasons.push("cached-input-detail-missing");
+      if (!cacheWriteKnown || cacheWriteTokens === null) reasons.push("cache-write-detail-missing");
+    } else {
+      reasons.push("input-detail-missing");
     }
+
+    if (usage.outputKnown) addCost(usage.output, "output");
+    else reasons.push("output-detail-missing");
+
+    const remainder = Math.max(0, total - pricedTokens);
+    if (usage.inputKnown && !usage.outputKnown) addCost(remainder, "output", true);
+    else if (!usage.inputKnown && usage.outputKnown) addMinimum(remainder, ["input", "cachedInput", "cacheWrite"]);
+    else addMinimum(remainder, allCategories);
   }
 
-  const outputValid = usage.outputKnown && !usage.inconsistent && usage.output <= total;
-  if (outputValid) {
-    outputUsd = (usage.output * rates.output * multiplier) / USD_PER_MILLION_TOKENS;
-    pricedTokens += usage.output;
-  } else {
-    const unknownOutput = usage.outputKnown ? usage.output : Math.max(0, total - (usage.inputKnown ? usage.input : 0));
-    unpricedTokens += unknownOutput;
-    if (!usage.outputKnown) reasons.push("output-detail-missing");
-    if (usage.inconsistent || usage.output > total) reasons.push("output-detail-inconsistent");
+  if (minimumModelRate) {
+    reasons.push("unknown-model-price-minimum-scenario");
+    minimumEstimatedTokens = pricedTokens;
   }
-
-  const totalUsd = inputUsd + cachedInputUsd + cacheWriteInputUsd + outputUsd;
   const serviceTierUnknownTokens = serviceTier === "unknown" ? pricedTokens : 0;
   const contextUnknownTokens = contextLevel === "unknown" ? pricedTokens : 0;
   if (serviceTier === "unknown") reasons.push("service-tier-unknown-standard-scenario");
-  if (contextLevel === "unknown") reasons.push("request-context-unknown-short-scenario");
+  if (contextLevel === "unknown") reasons.push("request-context-unknown-minimum-scenario");
+  const totalUsd = inputUsd + cachedInputUsd + cacheWriteInputUsd + outputUsd;
   return {
     model: model.name,
     priceVersion: version,
@@ -222,12 +276,14 @@ function estimateEventCost(event = {}) {
     totalUsd: pricedTokens > 0 ? totalUsd : null,
     pricedTokens,
     unpricedTokens,
+    minimumEstimatedTokens,
+    minimumRateModels: minimumModelRate ? [model.name] : [],
     unpricedModels: [],
     unpricedReasons: [...new Set(reasons)],
     serviceTierUnknownTokens,
     contextUnknownTokens,
-    cacheWriteUnknownTokens: cacheWriteKnown ? 0 : (usage.inputKnown ? usage.input || 0 : 0),
-    pricingStatus: pricedTokens === 0 ? "unpriced" : unpricedTokens > 0 ? "partial" : "estimated",
+    cacheWriteUnknownTokens,
+    pricingStatus: minimumEstimatedTokens > 0 ? "minimum-estimate" : "estimated",
   };
 }
 
@@ -242,7 +298,9 @@ function createCostSummaryState(options = {}) {
     cacheRateCached: 0,
     pricedTokens: 0,
     unpricedTokens: 0,
+    minimumEstimatedTokens: 0,
     pricedRecords: 0,
+    minimumEstimatedRecords: 0,
     unpricedRecords: 0,
     serviceTierUnknownTokens: 0,
     serviceTierUnknownRecords: 0,
@@ -253,24 +311,27 @@ function createCostSummaryState(options = {}) {
   };
   const models = new Set();
   const unpricedModels = new Set();
+  const minimumRateModels = new Set();
   const unpricedReasons = new Set();
   const priceVersions = new Set();
 
   function add(item, estimate = estimateEventCost(item)) {
     for (const field of [
       "inputUsd", "cachedInputUsd", "cacheWriteInputUsd", "outputUsd", "cacheRateInput", "cacheRateCached",
-      "pricedTokens", "unpricedTokens", "serviceTierUnknownTokens", "contextUnknownTokens", "cacheWriteUnknownTokens",
+      "pricedTokens", "unpricedTokens", "minimumEstimatedTokens", "serviceTierUnknownTokens", "contextUnknownTokens", "cacheWriteUnknownTokens",
     ]) {
       if (field in estimate) totals[field] += Number(estimate[field] || 0);
     }
     totals.totalUsd += Number(estimate.totalUsd || 0);
     if (estimate.pricedTokens > 0) totals.pricedRecords += 1;
+    if (estimate.minimumEstimatedTokens > 0) totals.minimumEstimatedRecords += 1;
     if (estimate.unpricedTokens > 0) totals.unpricedRecords += 1;
     if (estimate.serviceTierUnknownTokens > 0) totals.serviceTierUnknownRecords += 1;
     if (estimate.contextUnknownTokens > 0) totals.contextUnknownRecords += 1;
     if (estimate.cacheWriteUnknownTokens > 0) totals.cacheWriteUnknownRecords += 1;
     if (modelNameIsKnown(estimate.model)) models.add(estimate.model);
     for (const name of estimate.unpricedModels) unpricedModels.add(name);
+    for (const name of estimate.minimumRateModels || []) minimumRateModels.add(name);
     for (const reason of estimate.unpricedReasons) unpricedReasons.add(reason);
     priceVersions.add(estimate.priceVersion);
     const usage = usageFields(item);
@@ -292,9 +353,12 @@ function createCostSummaryState(options = {}) {
       modelCount: models.size,
       pricedTokens: totals.pricedTokens,
       unpricedTokens: totals.unpricedTokens,
+      minimumEstimatedTokens: totals.minimumEstimatedTokens,
       pricedRecords: totals.pricedRecords,
       unpricedRecords: totals.unpricedRecords,
+      minimumEstimatedRecords: totals.minimumEstimatedRecords,
       unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
+      minimumRateModels: [...minimumRateModels].sort((a, b) => a.localeCompare(b)),
       unpricedReasons: [...unpricedReasons].sort(),
       serviceTierUnknownTokens: totals.serviceTierUnknownTokens,
       serviceTierUnknownRecords: totals.serviceTierUnknownRecords,

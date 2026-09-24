@@ -142,6 +142,7 @@ function emptyRow(key) {
     costByModel: {},
     pricedTokens: 0,
     unpricedTokens: 0,
+    minimumEstimatedTokens: 0,
     serviceTierUnknownTokens: 0,
     contextUnknownTokens: 0,
     cacheWriteUnknownTokens: 0,
@@ -223,6 +224,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
         totalUsd: 0,
         pricedTokens: 0,
         unpricedTokens: 0,
+        minimumEstimatedTokens: 0,
         serviceTierUnknownTokens: 0,
         contextUnknownTokens: 0,
         cacheWriteUnknownTokens: 0,
@@ -231,6 +233,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
       cost.totalUsd += Number(estimate.totalUsd || 0);
       cost.pricedTokens += Number(estimate.pricedTokens || 0);
       cost.unpricedTokens += Number(estimate.unpricedTokens || 0);
+      cost.minimumEstimatedTokens += Number(estimate.minimumEstimatedTokens || 0);
       cost.serviceTierUnknownTokens += Number(estimate.serviceTierUnknownTokens || 0);
       cost.contextUnknownTokens += Number(estimate.contextUnknownTokens || 0);
       cost.cacheWriteUnknownTokens += Number(estimate.cacheWriteUnknownTokens || 0);
@@ -238,6 +241,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
       row.modelCosts.set(modelName, cost);
       row.pricedTokens += Number(estimate.pricedTokens || 0);
       row.unpricedTokens += Number(estimate.unpricedTokens || 0);
+      row.minimumEstimatedTokens += Number(estimate.minimumEstimatedTokens || 0);
       row.serviceTierUnknownTokens += Number(estimate.serviceTierUnknownTokens || 0);
       row.contextUnknownTokens += Number(estimate.contextUnknownTokens || 0);
       row.cacheWriteUnknownTokens += Number(estimate.cacheWriteUnknownTokens || 0);
@@ -251,7 +255,7 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
     if (row.estimatedRecords > 0) {
       pricingStatus = row.unpricedTokens > 0
         ? (row.pricedTokens > 0 ? "partial" : "unpriced")
-        : "estimated";
+        : row.minimumEstimatedTokens > 0 ? "minimum-estimate" : "estimated";
       if (!row.pricedTokens && !row.unpricedTokens && statusValues.includes("unknown")) pricingStatus = "unknown";
     }
     return {
@@ -266,13 +270,15 @@ export function buildTimelineRows(events = [], range = {}, bucket = "day", optio
         totalUsd: cost.totalUsd,
         pricedTokens: cost.pricedTokens,
         unpricedTokens: cost.unpricedTokens,
+        minimumEstimatedTokens: cost.minimumEstimatedTokens,
         serviceTierUnknownTokens: cost.serviceTierUnknownTokens,
         contextUnknownTokens: cost.contextUnknownTokens,
         cacheWriteUnknownTokens: cost.cacheWriteUnknownTokens,
-        pricingStatus: cost.unpricedTokens > 0 ? (cost.pricedTokens > 0 ? "partial" : "unpriced") : "estimated",
+        pricingStatus: cost.unpricedTokens > 0 ? (cost.pricedTokens > 0 ? "partial" : "unpriced") : cost.minimumEstimatedTokens > 0 ? "minimum-estimate" : "estimated",
       }])),
       pricedTokens: row.pricedTokens,
       unpricedTokens: row.unpricedTokens,
+      minimumEstimatedTokens: row.minimumEstimatedTokens,
       serviceTierUnknownTokens: row.serviceTierUnknownTokens,
       contextUnknownTokens: row.contextUnknownTokens,
       cacheWriteUnknownTokens: row.cacheWriteUnknownTokens,

@@ -68,7 +68,7 @@ function preferredTheme() {
   } catch {
     // Ignore storage failures in restricted contexts.
   }
-  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return "light";
 }
 
 function updateThemeButtons() {
@@ -256,7 +256,7 @@ function timelineAccessibleLabel(row, mode) {
   const key = String(row?.key || row?.name || "未知时间");
   if (mode === "cost") {
     const amount = Number(row?.pricedTokens || 0) > 0 ? formatPreciseUsd(timelineValue(row, "cost")) : "无可计价费用";
-    return `${key}，已计价费用估算 ${amount}，已计价 ${formatTokens(row?.pricedTokens || 0)} tokens，未计价 ${formatTokens(row?.unpricedTokens || 0)} tokens`;
+    return `${key}，费用估算 ${amount}，其中 ${formatTokens(row?.minimumEstimatedTokens || 0)} tokens 按最低费率估算，未计价 ${formatTokens(row?.unpricedTokens || 0)} tokens`;
   }
   const details = mode === "model" ? (row?.models || []) : (row?.channels || []);
   const kind = mode === "model" ? "模型" : "渠道";
@@ -846,7 +846,9 @@ function summarizeEmbeddedCostEstimates(events, pricing = {}) {
     cacheRateCached: 0,
     pricedTokens: 0,
     unpricedTokens: 0,
+    minimumEstimatedTokens: 0,
     pricedRecords: 0,
+    minimumEstimatedRecords: 0,
     unpricedRecords: 0,
     serviceTierUnknownTokens: 0,
     serviceTierUnknownRecords: 0,
@@ -857,15 +859,17 @@ function summarizeEmbeddedCostEstimates(events, pricing = {}) {
   };
   const models = new Set();
   const unpricedModels = new Set();
+  const minimumRateModels = new Set();
   const unpricedReasons = new Set();
   const priceVersions = new Set();
   for (const event of events) {
     const estimate = event.costEstimate;
     for (const field of [
-      "inputUsd", "cachedInputUsd", "cacheWriteInputUsd", "outputUsd", "totalUsd", "pricedTokens", "unpricedTokens",
+      "inputUsd", "cachedInputUsd", "cacheWriteInputUsd", "outputUsd", "totalUsd", "pricedTokens", "unpricedTokens", "minimumEstimatedTokens",
       "serviceTierUnknownTokens", "contextUnknownTokens", "cacheWriteUnknownTokens",
     ]) totals[field] += Number(estimate[field] || 0);
     if (Number(estimate.pricedTokens || 0) > 0) totals.pricedRecords += 1;
+    if (Number(estimate.minimumEstimatedTokens || 0) > 0) totals.minimumEstimatedRecords += 1;
     if (Number(estimate.unpricedTokens || 0) > 0) totals.unpricedRecords += 1;
     if (Number(estimate.serviceTierUnknownTokens || 0) > 0) totals.serviceTierUnknownRecords += 1;
     if (Number(estimate.contextUnknownTokens || 0) > 0) totals.contextUnknownRecords += 1;
@@ -873,6 +877,7 @@ function summarizeEmbeddedCostEstimates(events, pricing = {}) {
     const name = String(event.model || "Unknown model").trim();
     if (name && name.toLocaleLowerCase() !== "unknown model") models.add(name);
     for (const model of estimate.unpricedModels || []) unpricedModels.add(model);
+    for (const model of estimate.minimumRateModels || []) minimumRateModels.add(model);
     for (const reason of estimate.unpricedReasons || []) unpricedReasons.add(reason);
     if (estimate.priceVersion) priceVersions.add(estimate.priceVersion);
     const usage = event.total || {};
@@ -893,9 +898,12 @@ function summarizeEmbeddedCostEstimates(events, pricing = {}) {
     modelCount: models.size,
     pricedTokens: totals.pricedTokens,
     unpricedTokens: totals.unpricedTokens,
+    minimumEstimatedTokens: totals.minimumEstimatedTokens,
     pricedRecords: totals.pricedRecords,
     unpricedRecords: totals.unpricedRecords,
+    minimumEstimatedRecords: totals.minimumEstimatedRecords,
     unpricedModels: [...unpricedModels].sort((a, b) => a.localeCompare(b)),
+    minimumRateModels: [...minimumRateModels].sort((a, b) => a.localeCompare(b)),
     unpricedReasons: [...unpricedReasons].sort(),
     serviceTierUnknownTokens: totals.serviceTierUnknownTokens,
     serviceTierUnknownRecords: totals.serviceTierUnknownRecords,
@@ -937,18 +945,20 @@ function renderCostMetrics(summary) {
   const totalTokens = formatTokens(summary.totals.total);
   const caveats = [];
   if (estimate.serviceTierUnknownRecords > 0) caveats.push(`${formatTokens(estimate.serviceTierUnknownRecords)} 条记录的服务等级未知，按 Standard 情景估算`);
-  if (estimate.contextUnknownRecords > 0) caveats.push(`${formatTokens(estimate.contextUnknownRecords)} 条记录无法可靠对应单次请求输入，按短上下文情景估算`);
-  if (estimate.cacheWriteUnknownRecords > 0) caveats.push(`${formatTokens(estimate.cacheWriteUnknownTokens)} 个输入 tokens 缺少缓存写入明细，其输入费用未计入`);
-  if (estimate.unpricedTokens > 0) caveats.push(`未计价 ${formatTokens(estimate.unpricedTokens)} / ${totalTokens} tokens`);
+  if (estimate.contextUnknownRecords > 0) caveats.push(`${formatTokens(estimate.contextUnknownRecords)} 条记录无法可靠对应单次请求输入，按可用的较低上下文费率估算`);
+  if (estimate.cacheWriteUnknownRecords > 0) caveats.push(`${formatTokens(estimate.cacheWriteUnknownTokens)} 个输入 tokens 缺少缓存写入明细，相关未知部分按最低费率估算`);
+  if (estimate.minimumEstimatedTokens > 0) caveats.push(`${formatTokens(estimate.minimumEstimatedTokens)} / ${totalTokens} tokens 使用最低费率估算`);
+  if (estimate.minimumRateModels?.length) caveats.push(`模型 ${estimate.minimumRateModels.join("、")} 缺少专用单价，按价目表最低费率估算`);
+  if (estimate.unpricedTokens > 0) caveats.push(`仍有 ${formatTokens(estimate.unpricedTokens)} tokens 无法估算`);
   note.innerHTML = `
-    <p>按 OpenAI API 公布单价估算 · ${escapeHtml(checkedAt)} · <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer">价格来源</a></p>
-    <p>金额仅按日志中可用的 token 明细折算 API 等价费用，不代表实际账单，也不含工具调用等非 token 费用。</p>
+    <p>按当前价目表估算 · ${escapeHtml(checkedAt)} · <a href="https://developers.openai.com/api/docs/pricing" target="_blank" rel="noopener noreferrer">默认价格来源</a></p>
+    <p>金额按已知明细及最低费率情景折算 API 等价费用，不代表实际账单，也不含工具调用等非 token 费用。</p>
     ${caveats.length
       ? `<ul aria-label="估算限制">${caveats.map((caveat) => `<li>${escapeHtml(caveat)}。</li>`).join("")}</ul>`
       : "<p>缓存读取与写入按各自官方费率计入总额。</p>"}
   `;
   note.title = estimate.unpricedModels?.length
-    ? `未找到官方单价的模型：${estimate.unpricedModels.join("、")}`
+    ? `仍无法计价的模型：${estimate.unpricedModels.join("、")}`
     : "更新计价标准后，所有已索引的历史用量会按新单价重算。";
 }
 
@@ -999,6 +1009,81 @@ function renderBarList(container, rows, colorMap = null) {
   bindUsageRows(container, ".bar-row", rows);
 }
 
+function timelineBreakdownReady(rows, mode) {
+  if (mode === "channel") return true;
+  const activeRows = rows.filter((row) => usageValue(row?.total, "total") > 0);
+  if (mode === "model") {
+    return activeRows.every((row) => Array.isArray(row.models) &&
+      Math.abs(row.models.reduce((sum, model) => sum + usageValue(model.total, "total"), 0) -
+        usageValue(row.total, "total")) < 1e-6);
+  }
+  return activeRows.every((row) => {
+    const costs = row.costByModel;
+    if (!costs || typeof costs !== "object" || Array.isArray(costs)) return false;
+    if (!Number.isFinite(Number(row.pricedTokens)) || !Number.isFinite(Number(row.unpricedTokens))) return false;
+    const pricedTokens = Object.values(costs).reduce((sum, cost) => sum + Number(cost.pricedTokens || 0), 0);
+    const unpricedTokens = Object.values(costs).reduce((sum, cost) => sum + Number(cost.unpricedTokens || 0), 0);
+    return Math.abs(pricedTokens - Number(row.pricedTokens)) < 1e-6 &&
+      Math.abs(unpricedTokens - Number(row.unpricedTokens)) < 1e-6;
+  });
+}
+
+export function timelineDetailRows(summary, mode) {
+  if (summary.timelineError) return [];
+  if (mode === "channel") return summary.channels || [];
+  if (mode === "model") return summary.models || [];
+  const byModel = new Map();
+  for (const slot of summary.timeline || []) {
+    for (const [name, cost] of Object.entries(slot.costByModel || {})) {
+      const amount = Number(cost?.totalUsd || 0);
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      byModel.set(name, (byModel.get(name) || 0) + amount);
+    }
+  }
+  return [...byModel].map(([name, totalUsd]) => ({ name, totalUsd }))
+    .sort((left, right) => right.totalUsd - left.totalUsd || left.name.localeCompare(right.name));
+}
+
+export function renderCostDetailHtml(rows, colorMap = null) {
+  if (!rows.length) return '<div class="empty">没有可计价的费用记录</div>';
+  const max = rows[0].totalUsd || 1;
+  return rows.map((row) => {
+    const name = escapeHtml(row.name);
+    const amount = formatPreciseUsd(row.totalUsd);
+    const color = colorMap?.get(row.name) || getModelColor(row.name);
+    const width = Math.max(2, (row.totalUsd / max) * 100);
+    return `
+      <div class="bar-row" tabindex="0" aria-label="${name}，费用估算 ${amount}">
+        <div class="bar-label">
+          <span class="bar-name" title="${name}">${name}</span>
+          <span class="bar-value" title="${amount}">${amount}</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width: ${width}%; background: ${color};"></div></div>
+      </div>
+    `;
+  }).join("");
+}
+
+function renderTimelineDetails(summary, channelColors, modelColors) {
+  const mode = state.timelineMode;
+  const label = { channel: "按渠道", model: "按模型", cost: "按花销" }[mode] || "按渠道";
+  $("#detailModeLabel").textContent = label;
+  const container = $("#detailList");
+  if (summary.timelineError) {
+    container.innerHTML = '<div class="empty">时间槽过多，请缩短日期范围或调大时间粒度。</div>';
+    return;
+  }
+  if (!timelineBreakdownReady(summary.timeline || [], mode)) {
+    container.innerHTML = `<div class="empty">${mode === "model" ? "模型" : "费用"}明细不可用，请刷新数据。</div>`;
+    return;
+  }
+  const rows = timelineDetailRows(summary, mode);
+  if (mode === "cost") {
+    container.innerHTML = renderCostDetailHtml(rows, modelColors);
+    return;
+  }
+  renderBarList(container, rows, mode === "model" ? modelColors : channelColors);
+}
 const COMPARISON_PERIOD_LABELS = { today: "今日", week: "本周", month: "本月", all: "全部" };
 
 function comparisonTokenValueClass(formattedValue) {
@@ -1366,9 +1451,10 @@ export function formatTimelineTooltip(row, mode = "channel") {
   const caveats = [];
   if (Number(row?.unpricedTokens || 0) > 0) caveats.push(`未计价 ${formatTokens(row.unpricedTokens)} tokens`);
   if (Number(row?.serviceTierUnknownTokens || 0) > 0) caveats.push("服务等级未知，金额按 Standard 情景估算");
-  if (Number(row?.contextUnknownTokens || 0) > 0) caveats.push("请求上下文未知，金额按短上下文情景估算");
-  if (Number(row?.cacheWriteUnknownTokens || 0) > 0) caveats.push("缓存写入明细未知，相关输入费用未计入");
-  return `<div class="usage-tooltip-title">${title}</div><div class="usage-tooltip-subtitle">已计价估算</div><div class="usage-tooltip-grid"><span class="usage-tooltip-label">已计价金额</span><span class="usage-tooltip-value">${amountLabel}</span><span class="usage-tooltip-label">已计价 tokens</span><span class="usage-tooltip-value">${formatTokens(row?.pricedTokens || 0)}</span></div>${costs ? `<div class="usage-tooltip-subtitle">按模型</div><div class="usage-tooltip-grid">${costs}</div>` : ""}${caveats.length ? `<div class="usage-tooltip-note">${caveats.map(escapeHtml).join("；")}</div>` : ""}`;
+  if (Number(row?.contextUnknownTokens || 0) > 0) caveats.push("请求上下文未知，按可用的较低上下文费率估算");
+  if (Number(row?.minimumEstimatedTokens || 0) > 0) caveats.push(`其中 ${formatTokens(row.minimumEstimatedTokens)} tokens 按最低费率估算`);
+  if (Number(row?.cacheWriteUnknownTokens || 0) > 0) caveats.push("缓存写入明细未知，相关未知部分按最低费率估算");
+  return `<div class="usage-tooltip-title">${title}</div><div class="usage-tooltip-subtitle">费用估算</div><div class="usage-tooltip-grid"><span class="usage-tooltip-label">估算金额</span><span class="usage-tooltip-value">${amountLabel}</span><span class="usage-tooltip-label">已纳入估算 tokens</span><span class="usage-tooltip-value">${formatTokens(row?.pricedTokens || 0)}</span></div>${costs ? `<div class="usage-tooltip-subtitle">按模型</div><div class="usage-tooltip-grid">${costs}</div>` : ""}${caveats.length ? `<div class="usage-tooltip-note">${caveats.map(escapeHtml).join("；")}</div>` : ""}`;
 }
 
 function updateTimelineModeButtons() {
@@ -1433,7 +1519,7 @@ export function drawTimeline(canvas, rows, channelRows = [], channelColors = new
   const endLabel = range?.end ? dateKey(asDate(range.end)) : "";
   const rangeLabelText = startLabel && endLabel ? `，统计范围 ${startLabel} 至 ${endLabel}` : "";
   const baseAriaLabel = mode === "cost"
-    ? `时间分布，按模型堆叠已计价 API 等价费用估算，美元为纵轴单位${rangeLabelText}；每个时间槽可查看完整日期、模型费用和未计价 tokens`
+    ? `时间分布，按模型堆叠 API 等价费用估算，美元为纵轴单位${rangeLabelText}；每个时间槽可查看完整日期、模型费用和最低费率估算部分`
     : `时间分布，${modeLabel}堆叠 tokens${rangeLabelText}；每个时间槽可查看完整日期和明细`;
   canvas.dataset.chartAriaLabel = baseAriaLabel;
   canvas.setAttribute?.("aria-label", baseAriaLabel);
@@ -1472,24 +1558,7 @@ export function drawTimeline(canvas, rows, channelRows = [], channelColors = new
     return;
   }
 
-  const activeRows = rows.filter((row) => usageValue(row?.total, "total") > 0);
-  const modelBreakdownReady = activeRows.every((row) => {
-    if (!Array.isArray(row.models)) return false;
-    const modelTotal = row.models.reduce((sum, model) => sum + usageValue(model.total, "total"), 0);
-    return Math.abs(modelTotal - usageValue(row.total, "total")) < 1e-6;
-  });
-  const costBreakdownReady = activeRows.every((row) => {
-    const costs = row.costByModel;
-    if (!costs || typeof costs !== "object" || Array.isArray(costs)) return false;
-    if (!Number.isFinite(Number(row.pricedTokens)) || !Number.isFinite(Number(row.unpricedTokens))) return false;
-    const pricedTokens = Object.values(costs).reduce((sum, cost) => sum + Number(cost.pricedTokens || 0), 0);
-    const unpricedTokens = Object.values(costs).reduce((sum, cost) => sum + Number(cost.unpricedTokens || 0), 0);
-    return Math.abs(pricedTokens - Number(row.pricedTokens)) < 1e-6 &&
-      Math.abs(unpricedTokens - Number(row.unpricedTokens)) < 1e-6;
-  });
-  const breakdownReady = mode === "channel" ||
-    (mode === "model" && modelBreakdownReady) ||
-    (mode === "cost" && costBreakdownReady);
+  const breakdownReady = timelineBreakdownReady(rows, mode);
   if (!breakdownReady) {
     const action = isStaticSnapshot() ? "请重新导出快照" : "请重启服务";
     const message = (mode === "model" ? "模型" : "费用") + "明细不可用，" + action;
@@ -1788,7 +1857,7 @@ function render() {
   const channelColors = getChannelColors(summary.channels);
   const allPeriodModels = state.periodComparison?.models || [];
   const modelColors = getModelColors([...allPeriodModels, ...summary.models]);
-  renderBarList($("#channelList"), summary.channels, channelColors);
+  renderTimelineDetails(summary, channelColors, modelColors);
   renderTimelineLegend(summary, channelColors, modelColors);
   updateTimelineModeButtons();
   renderHomes(homeRowsFromMetadata(metadata), { canModify: !isStaticSnapshot() });

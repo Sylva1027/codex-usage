@@ -39,7 +39,7 @@ node src/cli.js run
 
 看板会将已扫描日志中的 CLI、Codex Desktop、Codex Exec、JetBrains/PyCharm 等来源归类展示。没有写入这些日志、也没有被导入的 API 请求不会出现在统计中。
 
-费用按公开的 [OpenAI API 定价](https://developers.openai.com/api/docs/pricing)估算，可在看板中更新计价标准。**估算值不是 Codex 套餐的实际账单**；价格或请求信息不足时，页面会标明未定价或部分估算。
+费用按公开的 [OpenAI API 定价](https://developers.openai.com/api/docs/pricing)估算，可在看板中更新计价标准。已知的 token 明细按对应费率计算；Fast 模式优先根据响应记录识别，缺少响应字段时从本机运行日志读取该轮设置；长上下文按单次请求的输入 token 数判断。缺少缓存写入明细、模型专用单价或其他必要字段时，按当前价目表中适用的最低费率估算，并在页面标明这部分 token。**估算值不是 Codex 套餐的实际账单**。
 
 用量日志和 SQLite 索引保留在本机。默认索引位于 `~/.codex-usage/usage-index.sqlite`。
 

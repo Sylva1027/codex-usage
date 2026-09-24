@@ -17,9 +17,10 @@ import {
 } from "./usage-core.js";
 import { createRepositoryResolver } from "./repository-identity.js";
 import { createCostEstimateAccumulator, estimateCostForEvents, estimateEventCost } from "./pricing.js";
+import { loadServiceTierEvidence } from "./service-tier-evidence.js";
 import { buildTimelineRows } from "../public/timeline-utils.js";
 
-const STORE_SCHEMA_VERSION = 3;
+const STORE_SCHEMA_VERSION = 5;
 
 function localDateKey(date) {
   const year = date.getFullYear();
@@ -71,6 +72,7 @@ export class UsageStore {
     this.fingerprint = "";
     this.checkedAt = "";
     this.repositoryResolver = createRepositoryResolver();
+    this.serviceTierEvidence = null;
   }
 
   async open() {
@@ -173,7 +175,25 @@ export class UsageStore {
         "ALTER TABLE events ADD COLUMN service_tier TEXT NOT NULL DEFAULT 'unknown';",
         "ALTER TABLE events ADD COLUMN price_version TEXT NOT NULL DEFAULT '';",
         "UPDATE source_files SET size = -1, mtime_ms = -1;",
-      ].join("\n"), STORE_SCHEMA_VERSION);
+      ].join("\n"), 3);
+      version = 3;
+    }
+    if (version === 3) {
+      migrate(`
+        UPDATE source_files SET size = -1, mtime_ms = -1
+        WHERE path IN (SELECT DISTINCT source_path FROM events WHERE context_level = 'unknown' AND total > 0);
+      `, 4);
+      version = 4;
+    }
+    if (version === 4) {
+      migrate(`
+        UPDATE source_files SET size = -1, mtime_ms = -1
+        WHERE path IN (
+          SELECT source_path FROM events WHERE session_id IN (
+            SELECT session_id FROM events GROUP BY session_id HAVING COUNT(DISTINCT source_path) > 1
+          )
+        );
+      `, STORE_SCHEMA_VERSION);
       version = STORE_SCHEMA_VERSION;
     }
     if (version !== 0 && version !== STORE_SCHEMA_VERSION) {
@@ -240,6 +260,28 @@ export class UsageStore {
         context_level, service_tier, price_version, total, input, cached, output, reasoning
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
+    const previousStatement = database.prepare(`
+      SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total,
+        COALESCE(SUM(input), 0) AS input, COALESCE(SUM(cached), 0) AS cached,
+        COALESCE(SUM(output), 0) AS output, COALESCE(SUM(reasoning), 0) AS reasoning,
+        MIN(detail_mask & 1) AS input_known, MIN(detail_mask & 2) AS cached_known,
+        MIN(detail_mask & 4) AS output_known, MIN(detail_mask & 8) AS reasoning_known,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+        MIN(cache_write_known) AS cache_write_known
+      FROM events WHERE session_id = ? AND home_id = ? AND source_path <> ? AND timestamp_ms < ?
+    `);
+    const previousCumulativeForSession = (sessionId, timestamp) => {
+      const timestampMs = Date.parse(timestamp);
+      if (!Number.isFinite(timestampMs)) return null;
+      const earlier = previousStatement.get(sessionId, source.id, filePath, timestampMs);
+      if (!earlier.count) return null;
+      return {
+        usage: usageFromRow(earlier),
+        detailMask: Number(earlier.input_known || 0) | Number(earlier.cached_known || 0) |
+          Number(earlier.output_known || 0) | Number(earlier.reasoning_known || 0),
+        cacheWrite: { tokens: Number(earlier.cache_write_tokens || 0), known: Boolean(earlier.cache_write_known) },
+      };
+    };
     database.exec("BEGIN IMMEDIATE");
     try {
       insertSource.run(
@@ -286,7 +328,7 @@ export class UsageStore {
           event.usage.output,
           event.usage.reasoning,
         );
-      }, { repositoryResolver: this.repositoryResolver });
+      }, { repositoryResolver: this.repositoryResolver, previousCumulativeForSession });
       database.exec("COMMIT");
     } catch (error) {
       database.exec("ROLLBACK");
@@ -306,18 +348,26 @@ export class UsageStore {
     const failedHomeIds = new Set(failedHomes.map((home) => home.id));
     const failedHomePaths = new Set(failedHomes.map((home) => home.path));
     let updatedFileCount = 0;
+    const changedSessions = new Set();
 
     for (const file of files) {
       const existing = this.database
         .prepare("SELECT size, mtime_ms, kind, home_id, home_label, home_path FROM source_files WHERE path = ?")
         .get(file.filePath);
-      if (existing && Number(existing.size) === file.info.size && Number(existing.mtime_ms) === file.info.mtimeMs &&
+      const previousSessions = existing
+        ? this.database.prepare("SELECT DISTINCT session_id FROM events WHERE source_path = ?").all(file.filePath).map((row) => row.session_id)
+        : [];
+      const earlierFileChanged = previousSessions.some((sessionId) => changedSessions.has(sessionId));
+      if (!earlierFileChanged && existing && Number(existing.size) === file.info.size && Number(existing.mtime_ms) === file.info.mtimeMs &&
           existing.kind === (file.source.kind || "codex") && existing.home_id === file.source.id &&
           existing.home_label === file.source.label && existing.home_path === file.source.path) {
         continue;
       }
       try {
         await this.replaceFile(file);
+        for (const row of this.database.prepare("SELECT DISTINCT session_id FROM events WHERE source_path = ?").all(file.filePath)) {
+          changedSessions.add(row.session_id);
+        }
         updatedFileCount += 1;
       } catch (error) {
         warnings.push(`无法索引 ${file.filePath}: ${error.message}`);
@@ -330,6 +380,7 @@ export class UsageStore {
       }
     }
 
+    this.serviceTierEvidence = loadServiceTierEvidence(homes);
     this.homes = homes;
     this.warnings = warnings;
     this.generatedAt = new Date().toISOString();
@@ -425,7 +476,8 @@ export class UsageStore {
   }
 
   costEstimateRange(range) {
-    const statement = this.database.prepare("SELECT model, detail_mask, cache_write_tokens, cache_write_known, request_input_tokens, context_level, service_tier, price_version, total, input, cached, output, reasoning FROM events WHERE (? IS NULL OR timestamp_ms >= ?) AND (? IS NULL OR timestamp_ms <= ?)");
+    const tierEvidence = this.serviceTierEvidence;
+    const statement = this.database.prepare("SELECT timestamp_ms, session_id, model, detail_mask, cache_write_tokens, cache_write_known, request_input_tokens, context_level, service_tier, price_version, total, input, cached, output, reasoning FROM events WHERE (? IS NULL OR timestamp_ms >= ?) AND (? IS NULL OR timestamp_ms <= ?)");
     function* events() {
       for (const row of statement.iterate(...rangeParameters(range))) {
         yield {
@@ -435,7 +487,7 @@ export class UsageStore {
           cacheWriteKnown: Boolean(row.cache_write_known),
           requestInputTokens: Number(row.request_input_tokens || 0),
           contextLevel: row.context_level,
-          serviceTier: row.service_tier,
+          serviceTier: tierEvidence?.resolve(row.session_id, Number(row.timestamp_ms), row.service_tier) || row.service_tier,
           priceVersion: row.price_version,
           total: usageFromRow(row),
         };
@@ -445,6 +497,7 @@ export class UsageStore {
   }
 
   timelineRange(range, bucket, { onEstimate } = {}) {
+    const tierEvidence = this.serviceTierEvidence;
     const statement = this.database.prepare("SELECT timestamp_ms, session_id, channel, model, detail_mask, cache_write_tokens, cache_write_known, request_input_tokens, context_level, service_tier, price_version, total, input, cached, output, reasoning FROM events WHERE (? IS NULL OR timestamp_ms >= ?) AND (? IS NULL OR timestamp_ms <= ?)");
     function* events() {
       for (const row of statement.iterate(...rangeParameters(range))) {
@@ -458,7 +511,7 @@ export class UsageStore {
           cacheWriteKnown: Boolean(row.cache_write_known),
           requestInputTokens: Number(row.request_input_tokens || 0),
           contextLevel: row.context_level,
-          serviceTier: row.service_tier,
+          serviceTier: tierEvidence?.resolve(row.session_id, Number(row.timestamp_ms), row.service_tier) || row.service_tier,
           priceVersion: row.price_version,
           total: usageFromRow(row),
         };
