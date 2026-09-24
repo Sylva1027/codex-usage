@@ -18,10 +18,14 @@ cd codex-usage
 在项目目录启动本地看板：
 
 ```bash
-npm run serve
+node src/cli.js run
 ```
 
 然后打开 [http://127.0.0.1:3765/](http://127.0.0.1:3765/)。服务默认只监听本机地址；结束使用时在终端按 `Ctrl+C`。
+
+### Windows PowerShell 提示
+
+如果输入 `npm run serve` 时出现 `npm.ps1` 被禁止运行，直接使用上面的 `node src/cli.js run`。需要使用 npm 脚本时，可显式输入 `npm.cmd run serve`；汇总和导出同理使用 `npm.cmd run summary`、`npm.cmd run export`。这些命令不需要修改 PowerShell 执行策略。
 
 ## 看板能做什么
 
@@ -44,13 +48,13 @@ npm run serve
 在终端查看汇总：
 
 ```bash
-npm run summary
+node src/cli.js summary
 ```
 
 导出可单独打开的静态网页快照：
 
 ```bash
-npm run export
+node src/static-export.js
 ```
 
 导出文件位于 `dist/codex-usage.html`。静态快照不会自动刷新，需要重新导出才能包含新记录。文件内嵌用量数据及可能的本机路径，分享前请先检查内容。
