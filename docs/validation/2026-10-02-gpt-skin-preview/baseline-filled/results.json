@@ -1,0 +1,654 @@
+{
+  "date": "2026-10-02",
+  "browser": "154.0.4258.37",
+  "layouts": [
+    {
+      "viewport": 1920,
+      "documentWidth": 1920,
+      "shell": {
+        "x": 360,
+        "y": 0,
+        "width": 1200,
+        "height": 2321.8125,
+        "top": 0,
+        "right": 1560,
+        "bottom": 2321.8125,
+        "left": 360
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 360,
+        "height": 936,
+        "top": 124,
+        "right": 360,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1560,
+        "y": 124,
+        "width": 360,
+        "height": 936,
+        "top": 124,
+        "right": 1920,
+        "bottom": 1060,
+        "left": 1560
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 1920,
+      "documentWidth": 1920,
+      "shell": {
+        "x": 360,
+        "y": 0,
+        "width": 1200,
+        "height": 2321.8125,
+        "top": 0,
+        "right": 1560,
+        "bottom": 2321.8125,
+        "left": 360
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 360,
+        "height": 936,
+        "top": 124,
+        "right": 360,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1560,
+        "y": 124,
+        "width": 360,
+        "height": 936,
+        "top": 124,
+        "right": 1920,
+        "bottom": 1060,
+        "left": 1560
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    },
+    {
+      "viewport": 1680,
+      "documentWidth": 1680,
+      "shell": {
+        "x": 240,
+        "y": 0,
+        "width": 1200,
+        "height": 2321.8125,
+        "top": 0,
+        "right": 1440,
+        "bottom": 2321.8125,
+        "left": 240
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 240,
+        "height": 936,
+        "top": 124,
+        "right": 240,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1440,
+        "y": 124,
+        "width": 240,
+        "height": 936,
+        "top": 124,
+        "right": 1680,
+        "bottom": 1060,
+        "left": 1440
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 1680,
+      "documentWidth": 1680,
+      "shell": {
+        "x": 240,
+        "y": 0,
+        "width": 1200,
+        "height": 2321.8125,
+        "top": 0,
+        "right": 1440,
+        "bottom": 2321.8125,
+        "left": 240
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 240,
+        "height": 936,
+        "top": 124,
+        "right": 240,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1440,
+        "y": 124,
+        "width": 240,
+        "height": 936,
+        "top": 124,
+        "right": 1680,
+        "bottom": 1060,
+        "left": 1440
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    },
+    {
+      "viewport": 1440,
+      "documentWidth": 1440,
+      "shell": {
+        "x": 180,
+        "y": 0,
+        "width": 1080,
+        "height": 2435.625,
+        "top": 0,
+        "right": 1260,
+        "bottom": 2435.625,
+        "left": 180
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 180,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1260,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 1440,
+        "bottom": 1060,
+        "left": 1260
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 1440,
+      "documentWidth": 1440,
+      "shell": {
+        "x": 180,
+        "y": 0,
+        "width": 1080,
+        "height": 2435.625,
+        "top": 0,
+        "right": 1260,
+        "bottom": 2435.625,
+        "left": 180
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 180,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1260,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 1440,
+        "bottom": 1060,
+        "left": 1260
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    },
+    {
+      "viewport": 1280,
+      "documentWidth": 1280,
+      "shell": {
+        "x": 180,
+        "y": 0,
+        "width": 920,
+        "height": 2435.625,
+        "top": 0,
+        "right": 1100,
+        "bottom": 2435.625,
+        "left": 180
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 180,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1100,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 1280,
+        "bottom": 1060,
+        "left": 1100
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 1280,
+      "documentWidth": 1280,
+      "shell": {
+        "x": 180,
+        "y": 0,
+        "width": 920,
+        "height": 2435.625,
+        "top": 0,
+        "right": 1100,
+        "bottom": 2435.625,
+        "left": 180
+      },
+      "left": {
+        "x": 0,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 180,
+        "bottom": 1060,
+        "left": 0
+      },
+      "right": {
+        "x": 1100,
+        "y": 124,
+        "width": 180,
+        "height": 936,
+        "top": 124,
+        "right": 1280,
+        "bottom": 1060,
+        "left": 1100
+      },
+      "charactersVisible": true,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    },
+    {
+      "viewport": 1024,
+      "documentWidth": 1024,
+      "shell": {
+        "x": 16,
+        "y": 0,
+        "width": 992,
+        "height": 2559.8125,
+        "top": 0,
+        "right": 1008,
+        "bottom": 2559.8125,
+        "left": 16
+      },
+      "left": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "right": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "charactersVisible": false,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 1024,
+      "documentWidth": 1024,
+      "shell": {
+        "x": 16,
+        "y": 0,
+        "width": 992,
+        "height": 2559.8125,
+        "top": 0,
+        "right": 1008,
+        "bottom": 2559.8125,
+        "left": 16
+      },
+      "left": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "right": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "charactersVisible": false,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    },
+    {
+      "viewport": 390,
+      "documentWidth": 390,
+      "shell": {
+        "x": 10,
+        "y": 0,
+        "width": 370,
+        "height": 5423.3125,
+        "top": 0,
+        "right": 380,
+        "bottom": 5423.3125,
+        "left": 10
+      },
+      "left": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "right": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "charactersVisible": false,
+      "mode": "large",
+      "theme": "dark",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(32, 37, 43)"
+    },
+    {
+      "viewport": 390,
+      "documentWidth": 390,
+      "shell": {
+        "x": 10,
+        "y": 0,
+        "width": 370,
+        "height": 5423.3125,
+        "top": 0,
+        "right": 380,
+        "bottom": 5423.3125,
+        "left": 10
+      },
+      "left": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "right": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0,
+        "left": 0
+      },
+      "charactersVisible": false,
+      "mode": "large",
+      "theme": "light",
+      "images": [
+        {
+          "id": "characterSide",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        },
+        {
+          "id": "characterFront",
+          "complete": true,
+          "naturalWidth": 941,
+          "naturalHeight": 1672
+        }
+      ],
+      "background": "rgb(207, 216, 225)"
+    }
+  ],
+  "checks": [
+    "Both original images load",
+    "1920px dark no overflow or character overlap",
+    "1920px light no overflow or character overlap",
+    "1680px dark no overflow or character overlap",
+    "1680px light no overflow or character overlap",
+    "1440px dark no overflow or character overlap",
+    "1440px light no overflow or character overlap",
+    "1280px dark no overflow or character overlap",
+    "1280px light no overflow or character overlap",
+    "1024px dark no overflow or character overlap",
+    "1024px light no overflow or character overlap",
+    "390px dark no overflow or character overlap",
+    "390px light no overflow or character overlap",
+    "Full mode retains complete image inside each gutter",
+    "Opacity slider updates only the character layer",
+    "Hide characters restores central dashboard width",
+    "Dashboard interactions retain the selected layout",
+    "Offline preview has no external requests or page errors",
+    "Narrow preview panel still displays the 1920px desktop composition",
+    "Preview viewer switches layout, theme and phone viewport"
+  ],
+  "errors": [],
+  "externalRequests": []
+}

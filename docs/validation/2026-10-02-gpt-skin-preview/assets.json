@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-02",
+  "variant": "transparent-lineart",
+  "rendering": "Original PNG alpha mask rendered with the existing --ink color; source files unchanged",
+  "images": [
+    {
+      "name": "gpt-side-lineart.png",
+      "width": 941,
+      "height": 1672,
+      "bytes": 879942,
+      "sha256": "03866cf1437dfbce1b7d328613570408ab1452d5e0c9e4e4e5b668f227d701dd"
+    },
+    {
+      "name": "gpt-lineart.png",
+      "width": 941,
+      "height": 1672,
+      "bytes": 1015632,
+      "sha256": "3c0a000b2bbc633db393e7aebcb05b7534c5ae11c264014cb2848427aecf91f1"
+    }
+  ],
+  "htmlBytes": 2997604,
+  "fixture": "Synthetic project logs; no personal usage data"
+}

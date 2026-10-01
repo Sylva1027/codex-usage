@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-02",
+  "images": [
+    {
+      "name": "gpt-side.png",
+      "width": 941,
+      "height": 1672,
+      "bytes": 1941022,
+      "sha256": "a48a28352a7f620635e381b82f2c3eb76b449c92b4b0ac2c61af93095e49d194"
+    },
+    {
+      "name": "gpt.png",
+      "width": 941,
+      "height": 1672,
+      "bytes": 1983772,
+      "sha256": "d63cf618c1f3f4b3ba9eabc05989c38fbbafaabded48fa8fa903632b6d04139f"
+    }
+  ],
+  "htmlBytes": 5702696,
+  "fixture": "Synthetic project logs; no personal usage data"
+}
