@@ -13,7 +13,8 @@ npm.cmd test                 # node --test test/**/*.test.js
 npm.cmd run typecheck        # tsc -p tsconfig.checkjs.json（JS 项目，checkJs）
 npm.cmd run lint             # biome check --formatter-enabled=false .
 npm.cmd run format:check
-npm.cmd run skins:check      # 皮肤资源 manifest 与首屏脚本
+npm.cmd run skins:check      # 皮肤资源 manifest 与首屏脚本（发布内容，不需源 PNG）
+npm.cmd run skins:check:sources  # 另加：40 张作者源 PNG 与 WebP 副本绑定
 npm.cmd run skins:palette    # 十套角色配色
 ```
 
