@@ -9629,7 +9629,39 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
     };
 
     // 真实遮挡拒绝仍经正常 restore/verify；扫描异常则由 finally + release 清理。
-    const occlusionBefore = await screenshotWithStyleAttributeGuard(page, { fullPage: true });
+    const occlusionCaptureAttempts = [];
+    let previousOcclusionPng = null;
+    const captureOcclusionPage = async () => {
+      const png = await captureStableFullPage(page);
+      if (previousOcclusionPng) {
+        const details = await page.evaluate(
+          buildProbeSource("compare-images", previousOcclusionPng.toString("base64"), png.toString("base64")),
+        );
+        if (!details.identical) {
+          const hits = await page.evaluate(
+            (box) =>
+              Array.from(document.querySelectorAll("*"))
+                .filter((el) => {
+                  const r = el.getBoundingClientRect();
+                  return r.left <= box.x && r.right > box.x && r.top + scrollY <= box.y && r.bottom + scrollY > box.y;
+                })
+                .slice(-8)
+                .map((el) => ({
+                  tag: el.tagName,
+                  id: el.id,
+                  class: el.className,
+                  rect: el.getBoundingClientRect().toJSON(),
+                  filter: getComputedStyle(el).backdropFilter,
+                })),
+            details.bbox,
+          );
+          t.diagnostic(JSON.stringify({ occlusionPaint: details, hits }));
+        }
+      }
+      previousOcclusionPng = png;
+      return png;
+    };
+    const occlusionBefore = await captureSettledPage(captureOcclusionPage, occlusionCaptureAttempts);
     const occlusionBeforeState = await snapshot("#pricingSearch");
     let blockerInstalled = false;
     const occlusionPage = {
@@ -9662,7 +9694,7 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
     assert.match(occlusionResult.records[0].reason, /(遮挡|宿主及其后代之外的命中)/);
     assert.deepEqual(await noMarkerOrRule(), { markerPresent: false, temporaryRules: 0 });
     await page.locator("#m52-d2b3-occlusion").evaluate((element) => element.remove());
-    const occlusionAfter = await screenshotWithStyleAttributeGuard(page, { fullPage: true });
+    const occlusionAfter = await captureSettledPage(captureOcclusionPage, occlusionCaptureAttempts);
     const occlusionAfterState = await snapshot("#pricingSearch");
     const occlusionFinalDiff = await page.evaluate(
       buildProbeSource("compare-images", occlusionBefore.toString("base64"), occlusionAfter.toString("base64")),
@@ -9680,6 +9712,7 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       reason: occlusionResult.records[0].reason,
       cleanup: await noMarkerOrRule(),
       pageAfterBlockerRemovalPixelDiff: occlusionFinalDiff,
+      settledCaptureAttempts: occlusionCaptureAttempts,
       duringMeasurementStatePixelDiffIncludesInjectedBlocker: occlusionResult.diagnostics.restoration.statePixelDiff,
       restoration: occlusionResult.diagnostics.restoration,
     };
