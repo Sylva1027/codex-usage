@@ -1,0 +1,34 @@
+name: CI decoration diagnostic
+
+on:
+  push:
+    branches: [codex/ci-decoration-diagnostic-20261027]
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  decoration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Set up browser checks
+        shell: bash
+        run: npm install --prefix "$RUNNER_TEMP/agent-usage-browser" --no-package-lock --no-save playwright@1.62.1
+      - name: Check exact decoration restoration
+        shell: pwsh
+        env:
+          AGENT_USAGE_PLAYWRIGHT_MODULE: ${{ runner.temp }}/agent-usage-browser/node_modules/playwright/index.mjs
+        run: |
+          $nodeBinary = (Get-Command node.exe).Source
+          $arguments = '["--max-old-space-size=1536","--test","--test-reporter=spec","--test-concurrency=1","--test-name-pattern=D2b3：真实 Edge","test/skin-palette-quality.test.js"]'
+          pwsh -NoProfile -File scripts/run-with-memory-limit.ps1 -FilePath $nodeBinary -ArgumentsJson $arguments -WorkingDirectory $PWD -LimitMiB 7168 -TimeoutSeconds 180
+          exit $LASTEXITCODE

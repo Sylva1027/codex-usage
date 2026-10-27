@@ -9401,6 +9401,7 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       assert.equal(zoneStability.stable, true, `${mode} 箭头基准前聚光必须稳定：${zoneStability.reason}`);
       const zoneBefore = await snapshot("#calendarZoneSelect");
       const zoneClip = await clipFor("#calendarZoneSelect");
+      const zoneArrowStyleBefore = await page.locator("#calendarZoneSelect .calendar-zone-arrow").getAttribute("style");
       const zoneCaptureAttempts = [];
       const zonePng = await captureSettledPage(
         () => screenshotWithStyleAttributeGuard(page, { clip: zoneClip }),
@@ -9429,19 +9430,46 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       savePng(`${mode}-calendar-before.png`, zonePng);
       savePng(`${mode}-calendar-hidden.png`, zoneHidden.png);
       savePng(`${mode}-calendar-restored.png`, zoneAfterPng);
-      const zoneFinalDiff = pixelDiff(await decodePng(zonePng), await decodePng(zoneAfterPng));
-      assert.deepEqual(
-        zoneFinalDiff,
-        { sameSize: true, changedPixels: 0, changedInRegion: 0 },
-        `${mode} 箭头恢复后截图逐像素一致`,
-      );
       const arrowRegion = {
         x: Math.max(0, Math.floor(zoneBefore.arrow.rect.x - zoneBefore.rect.x)),
         y: Math.max(0, Math.floor(zoneBefore.arrow.rect.y - zoneBefore.rect.y)),
         width: Math.ceil(zoneBefore.arrow.rect.width),
         height: Math.ceil(zoneBefore.arrow.rect.height),
       };
-      const arrowDiff = pixelDiff(await decodePng(zonePng), await decodePng(zoneHidden.png), arrowRegion);
+      const zoneDecoded = await decodePng(zonePng);
+      const zoneAfterDecoded = await decodePng(zoneAfterPng);
+      const zoneFinalDiff = pixelDiff(zoneDecoded, zoneAfterDecoded);
+      const zonePixelDiagnostic = {
+        browser: evidence.browser,
+        runtime: await page.evaluate(() => ({
+          userAgent: navigator.userAgent,
+          dpr: devicePixelRatio,
+          scroll: { x: scrollX, y: scrollY },
+          hovered: Array.from(document.querySelectorAll(":hover"), (element) => element.id || element.tagName),
+        })),
+        clip: zoneClip,
+        hiddenClip: zoneHidden.clip,
+        restoredClip: await clipFor("#calendarZoneSelect"),
+        imageSize: {
+          before: { width: zoneDecoded.width, height: zoneDecoded.height },
+          restored: { width: zoneAfterDecoded.width, height: zoneAfterDecoded.height },
+        },
+        arrowRegion,
+        arrowStyleAttribute: {
+          before: zoneArrowStyleBefore,
+          restored: await page.locator("#calendarZoneSelect .calendar-zone-arrow").getAttribute("style"),
+        },
+        pngIdentical: zonePng.equals(zoneAfterPng),
+        settledCaptureAttempts: zoneCaptureAttempts,
+        statePixelDiff: zoneResult.diagnostics.restoration.statePixelDiff,
+        ...pixelDifferenceDetails(zoneDecoded, zoneAfterDecoded),
+      };
+      assert.deepEqual(
+        zoneFinalDiff,
+        { sameSize: true, changedPixels: 0, changedInRegion: 0 },
+        `${mode} 箭头恢复后截图逐像素一致：${JSON.stringify(zonePixelDiagnostic)}`,
+      );
+      const arrowDiff = pixelDiff(zoneDecoded, await decodePng(zoneHidden.png), arrowRegion);
       assert.ok(arrowDiff.changedInRegion > 0, `${mode} 隐藏期间箭头区域必须有像素变化`);
       evidence.samples.push({
         id: `calendar-${mode}`,
