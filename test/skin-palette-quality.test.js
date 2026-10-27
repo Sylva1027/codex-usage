@@ -9447,6 +9447,13 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       await page.mouse.move(0, 0);
       const zoneStability = await page.evaluate(buildProbeSource("spotlight-stability"));
       assert.equal(zoneStability.stable, true, `${mode} 箭头基准前聚光必须稳定：${zoneStability.reason}`);
+      // Pixel equality needs a device-pixel-aligned fixture; fractional borders round differently after repaint in Edge 155.
+      await page.locator("#calendarZoneSelect").evaluate((element) => {
+        element.style.removeProperty("translate");
+        const rect = element.getBoundingClientRect();
+        const dpr = devicePixelRatio;
+        element.style.translate = `${Math.round(rect.x * dpr) / dpr - rect.x}px ${Math.round(rect.y * dpr) / dpr - rect.y}px`;
+      });
       const zoneBefore = await snapshot("#calendarZoneSelect");
       const zoneClip = await clipFor("#calendarZoneSelect");
       const zoneArrowStyleBefore = await page.locator("#calendarZoneSelect .calendar-zone-arrow").getAttribute("style");
