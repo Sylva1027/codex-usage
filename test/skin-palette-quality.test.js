@@ -3143,6 +3143,52 @@ test("D8f2-core：截图异常也经 finally 恢复圆点背景、光晕和滚�
   assertD8f2Restored(sample);
 });
 
+test("D2b3：箭头恢复和异常收尾保留 style 属性存在性及无关声明", () => {
+  for (const scenario of ["missing", "empty", "unrelated"]) {
+    for (const cleanup of ["restore", "release-attempt"]) {
+      const dom = createElementStubDom();
+      const zone = dom.build({
+        selector: "#calendarZoneSelect",
+        tag: "BUTTON",
+        id: "calendarZoneSelect",
+        text: "本地时间",
+        rect: { x: 10, y: 20, width: 112, height: 30 },
+        descendants: [
+          {
+            tag: "SPAN",
+            className: "calendar-zone-arrow",
+            rect: { x: 100, y: 30, width: 8, height: 8 },
+            attributes: scenario === "empty" ? { style: "" } : {},
+          },
+        ],
+      });
+      const arrow = zone.querySelector(".calendar-zone-arrow");
+      const probe = runInNewContext(
+        buildProbeSource("node-probe", "#calendarZoneSelect", null, null, true),
+        dom.sandbox,
+      );
+      const hide = runInNewContext(
+        buildProbeSource("hide", "#calendarZoneSelect", 0, "text", probe.attemptToken),
+        dom.sandbox,
+      );
+      if (scenario === "unrelated") arrow.style.setProperty("color", "rgb(1, 2, 3)", "important");
+      const result = runInNewContext(
+        buildProbeSource(cleanup, cleanup === "restore" ? hide.token : probe.attemptToken),
+        dom.sandbox,
+      );
+      assert.equal(cleanup === "restore" ? result.decorationRestored : result.ok, true);
+      assert.equal(arrow.hasAttribute("style"), scenario !== "missing", `${scenario}/${cleanup}: presence`);
+      assert.equal(arrow.style.getPropertyValue("visibility"), "");
+      if (scenario === "unrelated") {
+        assert.equal(arrow.style.getPropertyValue("color"), "rgb(1, 2, 3)");
+        assert.equal(arrow.style.getPropertyPriority("color"), "important");
+      } else {
+        assert.equal(arrow.getAttribute("style"), scenario === "missing" ? null : "");
+      }
+    }
+  }
+});
+
 test("M5.2.C-D2b3：只隔离指定箭头和 search 清除叉，并逐项恢复 priority、marker、值与焦点", () => {
   const dom = createElementStubDom();
   const zone = dom.build({
@@ -8946,6 +8992,8 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
           markerValue: element.getAttribute("data-skin-palette-measurement-decoration"),
           arrow: arrow
             ? {
+                styleAttributePresent: arrow.hasAttribute("style"),
+                styleAttributeValue: arrow.getAttribute("style"),
                 rect: (() => {
                   const box = arrow.getBoundingClientRect();
                   return { x: box.x, y: box.y, width: box.width, height: box.height };
