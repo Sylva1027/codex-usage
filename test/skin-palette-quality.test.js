@@ -9456,7 +9456,6 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       });
       const zoneBefore = await snapshot("#calendarZoneSelect");
       const zoneClip = await clipFor("#calendarZoneSelect");
-      const zoneArrowStyleBefore = await page.locator("#calendarZoneSelect .calendar-zone-arrow").getAttribute("style");
       const zoneCaptureAttempts = [];
       const zonePng = await captureSettledPage(
         () => screenshotWithStyleAttributeGuard(page, { clip: zoneClip }),
@@ -9496,27 +9495,8 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       const zoneFinalDiff = pixelDiff(zoneDecoded, zoneAfterDecoded);
       const zonePixelDiagnostic = {
         browser: evidence.browser,
-        runtime: await page.evaluate(() => ({
-          userAgent: navigator.userAgent,
-          dpr: devicePixelRatio,
-          scroll: { x: scrollX, y: scrollY },
-          hovered: Array.from(document.querySelectorAll(":hover"), (element) => element.id || element.tagName),
-        })),
         clip: zoneClip,
-        hiddenClip: zoneHidden.clip,
-        restoredClip: await clipFor("#calendarZoneSelect"),
-        imageSize: {
-          before: { width: zoneDecoded.width, height: zoneDecoded.height },
-          restored: { width: zoneAfterDecoded.width, height: zoneAfterDecoded.height },
-        },
-        arrowRegion,
-        arrowStyleAttribute: {
-          before: zoneArrowStyleBefore,
-          restored: await page.locator("#calendarZoneSelect .calendar-zone-arrow").getAttribute("style"),
-        },
-        pngIdentical: zonePng.equals(zoneAfterPng),
         settledCaptureAttempts: zoneCaptureAttempts,
-        statePixelDiff: zoneResult.diagnostics.restoration.statePixelDiff,
         ...pixelDifferenceDetails(zoneDecoded, zoneAfterDecoded),
       };
       assert.deepEqual(
@@ -9629,39 +9609,16 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
     };
 
     // 真实遮挡拒绝仍经正常 restore/verify；扫描异常则由 finally + release 清理。
+    // Keep the whole page in the viewport so full-page capture does not resize/repaint fixed dialog edges.
+    const recoveryViewport = page.viewportSize();
+    await page.setViewportSize({
+      width: recoveryViewport.width,
+      height: await page.evaluate(() => document.documentElement.scrollHeight),
+    });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    assert.equal(await page.evaluate(() => innerHeight >= document.documentElement.scrollHeight), true);
     const occlusionCaptureAttempts = [];
-    let previousOcclusionPng = null;
-    const captureOcclusionPage = async () => {
-      const png = await captureStableFullPage(page);
-      if (previousOcclusionPng) {
-        const details = await page.evaluate(
-          buildProbeSource("compare-images", previousOcclusionPng.toString("base64"), png.toString("base64")),
-        );
-        if (!details.identical) {
-          const hits = await page.evaluate(
-            (box) =>
-              Array.from(document.querySelectorAll("*"))
-                .filter((el) => {
-                  const r = el.getBoundingClientRect();
-                  return r.left <= box.x && r.right > box.x && r.top + scrollY <= box.y && r.bottom + scrollY > box.y;
-                })
-                .slice(-8)
-                .map((el) => ({
-                  tag: el.tagName,
-                  id: el.id,
-                  class: el.className,
-                  rect: el.getBoundingClientRect().toJSON(),
-                  filter: getComputedStyle(el).backdropFilter,
-                })),
-            details.bbox,
-          );
-          t.diagnostic(JSON.stringify({ occlusionPaint: details, hits }));
-        }
-      }
-      previousOcclusionPng = png;
-      return png;
-    };
-    const occlusionBefore = await captureSettledPage(captureOcclusionPage, occlusionCaptureAttempts);
+    const occlusionBefore = await captureSettledPage(() => captureStableViewport(page), occlusionCaptureAttempts);
     const occlusionBeforeState = await snapshot("#pricingSearch");
     let blockerInstalled = false;
     const occlusionPage = {
@@ -9694,7 +9651,7 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
     assert.match(occlusionResult.records[0].reason, /(遮挡|宿主及其后代之外的命中)/);
     assert.deepEqual(await noMarkerOrRule(), { markerPresent: false, temporaryRules: 0 });
     await page.locator("#m52-d2b3-occlusion").evaluate((element) => element.remove());
-    const occlusionAfter = await captureSettledPage(captureOcclusionPage, occlusionCaptureAttempts);
+    const occlusionAfter = await captureSettledPage(() => captureStableViewport(page), occlusionCaptureAttempts);
     const occlusionAfterState = await snapshot("#pricingSearch");
     const occlusionFinalDiff = await page.evaluate(
       buildProbeSource("compare-images", occlusionBefore.toString("base64"), occlusionAfter.toString("base64")),
@@ -9716,6 +9673,7 @@ test("M5.2.C-D2b3：真实 Edge 两种装饰隔离、低对比仍失败，异常
       duringMeasurementStatePixelDiffIncludesInjectedBlocker: occlusionResult.diagnostics.restoration.statePixelDiff,
       restoration: occlusionResult.diagnostics.restoration,
     };
+    await page.setViewportSize(recoveryViewport);
 
     const throwingPage = {
       evaluate(source, argument) {
