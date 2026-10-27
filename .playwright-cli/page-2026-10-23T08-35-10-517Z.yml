@@ -1,0 +1,154 @@
+- main [ref=e2]:
+  - generic [ref=e3]:
+    - heading "Agent Usage" [level=1] [ref=e4]
+    - generic [ref=e5]:
+      - button "Choose Waifu" [ref=e186]
+      - button "English interface. Switch to Chinese" [active] [pressed] [ref=e187]:
+        - generic [aria-hidden] [ref=e10]: 文
+        - generic [aria-hidden] [ref=e11]: /
+        - generic [aria-hidden] [ref=e12]: A
+      - button "Light theme. Switch to dark theme" [ref=e188]
+  - region "Filters" [ref=e189]:
+    - generic [ref=e20]:
+      - generic [ref=e21]: Range
+      - generic [ref=e23]:
+        - 'button "Current range: Today. Switch to 5-Hour Limit" [disabled] [ref=e190] [cursor=pointer]':
+          - generic [ref=e25]: 5h
+          - generic [aria-hidden] [ref=e26]: /
+          - generic [ref=e27]: 7d
+        - button "Today" [ref=e191] [cursor=pointer]
+        - button "Week" [ref=e192] [cursor=pointer]
+        - button "Month" [ref=e193] [cursor=pointer]
+        - button "All" [ref=e194] [cursor=pointer]
+        - generic [ref=e33] [cursor=pointer]:
+          - combobox "Recent Range" [ref=e195]: Last Month
+          - button "Show recent range options" [ref=e196]
+    - generic [ref=e36]:
+      - generic [ref=e37]: Custom
+      - button "Open date range calendar" [ref=e197] [cursor=pointer]:
+        - generic [ref=e40]: YYYY-MM-DD
+    - generic [ref=e47]:
+      - generic [ref=e48]:
+        - generic [ref=e49]: 60s
+        - generic [ref=e50]: Auto Refresh
+        - button "On" [pressed] [ref=e198] [cursor=pointer]
+      - combobox "Date Range Time Zone" [ref=e199] [cursor=pointer]:
+        - generic [ref=e54]: GMT+8
+      - generic [ref=e56]: "Last check: Oct 23, 04:34 PM GMT+8"
+  - region "Overview" [ref=e200]:
+    - article [ref=e59]:
+      - text: Total Tokens
+      - strong [ref=e60]: 0.00M
+    - article [ref=e61]:
+      - text: Total Input
+      - strong [ref=e62]: 0.00M
+    - article [ref=e63]:
+      - text: Cache Hit
+      - strong [ref=e64]: 0.00M
+    - article [ref=e65]:
+      - text: Output
+      - strong [ref=e66]: 0.00M
+    - article [ref=e67]:
+      - text: Reasoning Tokens
+      - strong [ref=e68]: 0.00M
+    - article [ref=e69]:
+      - text: Sessions
+      - strong [ref=e70]: "0"
+  - region "Estimated API Cost" [ref=e201]:
+    - article [ref=e72]:
+      - text: Estimated Cost
+      - strong [ref=e73]: —
+    - article [ref=e74]:
+      - text: Cache Miss
+      - strong [ref=e75]: —
+    - article [ref=e76]:
+      - text: Cache Hit
+      - strong [ref=e77]: —
+    - article [ref=e78]:
+      - text: Output
+      - strong [ref=e79]: —
+    - article [ref=e80]:
+      - text: Cache Hit Rate
+      - strong [ref=e81]: —
+    - article [ref=e82]:
+      - text: Models
+      - strong [ref=e83]: "0"
+  - region "Usage Trend" [ref=e202]:
+    - article [ref=e203]:
+      - generic [ref=e204]: VS Yesterday
+      - strong [ref=e205]: 0.00M
+      - generic [ref=e206]: No baseline
+    - article [ref=e207]:
+      - generic [ref=e208]: Usage Pace vs. Prior Period
+      - strong [ref=e209]: 0.00M
+      - generic [ref=e210]: No baseline
+    - article [ref=e211]:
+      - generic [ref=e212]: Yesterday's Tokens
+      - strong [ref=e213]: 0.00M
+      - generic [ref=e214]: 0 sessions
+  - generic [ref=e84]:
+    - region [ref=e215]:
+      - generic [ref=e86]:
+        - generic [ref=e87]:
+          - heading "Usage Over Time" [level=2] [ref=e216]
+          - generic "10/23/2026, 12:00:00 AM to 10/23/2026, 11:59:59 PM" [ref=e217]: 2026-10-23 to 2026-10-23
+        - group "View" [ref=e218]:
+          - button "Source" [pressed] [ref=e219] [cursor=pointer]
+          - button "Model" [ref=e220] [cursor=pointer]
+          - button "Cost" [ref=e221] [cursor=pointer]
+      - img "Usage over time, tokens stacked by source, from 2026-10-23 to 2026-10-23. Inspect each interval for dates and details." [ref=e222]
+      - list "Chart Legend" [ref=e223]
+    - region [ref=e224]:
+      - generic [ref=e97]:
+        - heading "Details" [level=2] [ref=e225]
+        - generic [ref=e99]: By Source
+      - generic [ref=e100]: No matching usage records
+  - region [ref=e227]:
+    - heading "Model Speed" [level=2] [ref=e228]
+    - generic [ref=e230]:
+      - region "Model Speed" [ref=e231]:
+        - paragraph [ref=e232]: There are no eligible performance records in this range.
+      - region "Model Speed" [ref=e233]:
+        - paragraph [ref=e234]: There are no eligible performance records in this range.
+  - region "Usage Across Time Ranges" [ref=e235]:
+    - generic [ref=e112]:
+      - generic [ref=e113]:
+        - generic [ref=e114]:
+          - heading "By Model" [level=2] [ref=e236]
+          - paragraph [ref=e163]: As of 10/23/2026, 4:31:53 PM
+        - searchbox "Search model usage" [ref=e237]
+      - generic [ref=e164]: No usage in the selected period
+    - generic [ref=e117]:
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - heading "By Repository" [level=2] [ref=e238]
+          - paragraph [ref=e166]: As of 10/23/2026, 4:31:53 PM
+        - searchbox "Search repository usage" [ref=e239]
+      - generic [ref=e167]: No usage in the selected period
+  - generic [ref=e122]:
+    - generic [ref=e123]:
+      - generic [ref=e124]:
+        - heading "Scanned Directories" [level=2] [ref=e240]
+        - button "Edit" [ref=e241] [cursor=pointer]
+      - generic [ref=e127]: No Codex, ZCode, DSH, OpenCode, Claude Code, or WorkBuddy directories found
+    - region "About Cost Estimates" [ref=e243]:
+      - generic [ref=e129]:
+        - heading "About Cost Estimates · 2026-10-01" [level=2] [ref=e244]
+        - button "Pricing Rates" [ref=e245] [cursor=pointer]
+        - generic "Updating pricing rates recalculates estimates for all indexed usage." [ref=e246]:
+          - paragraph [ref=e247]: Estimated using current rates · Pricing baseline 2026-10-01 · Default Pricing Source
+          - paragraph [ref=e248]: API-equivalent costs use available token details, with the lowest applicable rates used where details are missing. They are not actual bills and exclude tool calls and other non-token costs.
+          - paragraph [ref=e249]: Cache-hit input and cache writes are charged at their respective published rates.
+  - group [ref=e134]:
+    - generic "History Archives Expand / collapse" [ref=e250]:
+      - heading "History Archives" [level=2] [ref=e251]
+      - generic [ref=e137]: Expand / collapse
+    - generic [ref=e138]:
+      - generic [ref=e252]:
+        - generic [ref=e253]: "Registered archive segments: 1"
+        - generic [aria-hidden] [ref=e254]: ·
+        - generic [ref=e255]: "Registered events: 123"
+      - generic [ref=e256]:
+        - strong [ref=e258]: Archive segment 1
+        - generic [ref=e259]: File missing (range retained; event count unavailable)
+        - 'generic "Range: Oct 2, 2026, 10:04:05 AM – Oct 2, 2026, 10:05:05 AM" [ref=e261]'
